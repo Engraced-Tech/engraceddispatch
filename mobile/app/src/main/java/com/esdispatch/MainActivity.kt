@@ -1,4 +1,4 @@
-package com.esdispatch
+﻿package com.esdispatch
 
 // Font scale locked to 1.0 via attachBaseContext
 import android.os.Bundle
@@ -98,6 +98,9 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun showPendingCrashReport() {
+        // H4 remediation: raw crash stack traces are never surfaced to end
+        // users in production. The report dialog is a debug-build-only aid.
+        if (!BuildConfig.DEBUG) return
         try {
             val prefs = getSharedPreferences(com.esdispatch.DispatchApplication.PREFS, android.content.Context.MODE_PRIVATE)
             val crash = prefs.getString(com.esdispatch.DispatchApplication.KEY_LAST_CRASH, null)

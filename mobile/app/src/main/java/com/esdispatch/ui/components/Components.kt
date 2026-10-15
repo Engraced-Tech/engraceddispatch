@@ -1,4 +1,4 @@
-package com.esdispatch.ui.components
+﻿package com.esdispatch.ui.components
 
 import com.esdispatch.BuildConfig
 import com.esdispatch.data.ParcelStatus
@@ -1614,7 +1614,7 @@ fun SupportDialog(
                     "How are drivers paid?" to "All drivers are employed internally by ESDispatch. Base delivery fees are paid directly to the company. Drivers earn 100% of all customer tips received.",
                     "How do I mark a delivery as picked up?" to "Use the central QR scanner on the rider screen to scan the parcel barcode. This automatically verifies the assignment and updates the status to 'picked_up'.",
                     "How does real-time tracking work?" to "Customers can view live driver GPS coordinates updated directly in Firestore, allowing precise map marker tracking.",
-                    "How do I contact admin support?" to "Tap the email button below to send an instant support request to support@ESDispatch.com."
+                    "How do I contact admin support?" to "Tap the email button below to send an instant support request to support@engracedsmile.com."
                 )
 
                 faqs.forEachIndexed { index, (q, a) ->
@@ -1669,12 +1669,12 @@ fun SupportDialog(
                 Button(
                     onClick = {
                         val intent = android.content.Intent(android.content.Intent.ACTION_SENDTO).apply {
-                            data = android.net.Uri.parse("mailto:support@ESDispatch.com?subject=Support%20Request%20-%20ESDispatch")
+                            data = android.net.Uri.parse("mailto:support@engracedsmile.com?subject=Support%20Request%20-%20ESDispatch")
                         }
                         try {
                             context.startActivity(intent)
                         } catch (e: Exception) {
-                            Toast.makeText(context, "Email support: support@ESDispatch.com", Toast.LENGTH_LONG).show()
+                            Toast.makeText(context, "Email support: support@engracedsmile.com", Toast.LENGTH_LONG).show()
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Gold, contentColor = Obsidian),
@@ -1683,7 +1683,7 @@ fun SupportDialog(
                 ) {
                     Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Email support@ESDispatch.com", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text("Email support@engracedsmile.com", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             }
         },

@@ -1,4 +1,4 @@
-package com.esdispatch.viewmodel
+﻿package com.esdispatch.viewmodel
 
 import androidx.lifecycle.viewModelScope
 import com.esdispatch.data.CardInfo
@@ -80,63 +80,17 @@ open class WalletViewModel : AuthViewModel() {
             return
         }
 
-        com.esdispatch.data.FirebaseManager.updateUserWalletBalance(uid, amount) { success, newBalance ->
-            if (success) {
-                _walletBalance.value = newBalance
-                savePref("wallet_balance", newBalance)
-
-                val localTx = Transaction(
-                    id = txRef,
-                    title = title,
-                    date = "Today",
-                    amount = displayAmt,
-                    isTopUp = isTopUp,
-                    type = if (isTopUp) "CREDIT" else "DEBIT",
-                    status = "SUCCESS",
-                    reference = txRef,
-                    userId = uid
-                )
-                _transactions.value = listOf(localTx) + _transactions.value
-
-                com.esdispatch.data.FirebaseManager.recordLedgerTransaction(
-                    userId = uid,
-                    amount = amount,
-                    title = title,
-                    isTopUp = isTopUp,
-                    reference = txRef,
-                    status = "SUCCESS"
-                ) { _ -> }
-
-                val notifTitle = if (isTopUp) "Wallet Credited" else "Wallet Debited"
-                val notifMessage = if (isTopUp) {
-                    "Your ESDispatch wallet has been topped up with ₦${String.format("%,.2f", displayAmt)}."
-                } else {
-                    "Your ESDispatch wallet has been debited by ₦${String.format("%,.2f", displayAmt)}."
-                }
-                addNotification(notifTitle, notifMessage)
-
-                appContext?.let { ctx ->
-                    try {
-                        com.esdispatch.data.MyFirebaseMessagingService.showNotification(
-                            context = ctx,
-                            title = notifTitle,
-                            message = notifMessage,
-                            parcelId = null
-                        )
-                    } catch (e: Exception) {
-                        android.util.Log.e("WalletNotif", "Error showing wallet notification: ${e.message}")
-                    }
-                }
-
-                if (isTopUp) {
-                    com.esdispatch.util.SoundManager.playSuccessArpeggio()
-                }
-                onComplete?.invoke(true, "Wallet successfully updated. New balance: ₦${String.format("%,.2f", newBalance)}")
-            } else {
-                com.esdispatch.util.SoundManager.playErrorBuzz()
-                onComplete?.invoke(false, "Failed to process wallet transaction. Please check your network and retry.")
-            }
+        // C11 remediation: client-side wallet credits were removed entirely.
+        // Every balance mutation is verified server-side (Paystack reference
+        // required for top-ups; withdrawals flow through the review callable).
+        if (isTopUp) {
+            com.esdispatch.util.SoundManager.playErrorBuzz()
+            onComplete?.invoke(false, "Top-up requires a completed payment reference. Please retry payment.")
+        } else {
+            com.esdispatch.util.SoundManager.playErrorBuzz()
+            onComplete?.invoke(false, "Please use the withdrawal request flow.")
         }
+        return
     }
 
     fun requestWithdrawal(
@@ -160,27 +114,32 @@ open class WalletViewModel : AuthViewModel() {
             onComplete(false, "Insufficient wallet balance.")
             return
         }
-        com.esdispatch.data.FirebaseManager.submitWithdrawalRequest(
-            userId = uid,
-            userRole = userRole,
-            userName = _userName.value.ifBlank { "Member" },
-            amount = amount,
-            bankName = bankName,
-            accountNumber = accountNumber,
-            accountName = accountName
-        ) { success, errorMsg ->
-            if (success) {
-                val newBal = (_walletBalance.value - amount).coerceAtLeast(0.0)
+        // Server-authoritative withdrawal (C11 remediation): the wallet debit
+        // and the review-queue request are produced by the
+        // `requestWalletWithdrawal` Cloud Function.
+        val functions = com.google.firebase.functions.FirebaseFunctions.getInstance()
+        val callData = hashMapOf(
+            "amount" to amount,
+            "bankName" to bankName,
+            "accountNumber" to accountNumber,
+            "accountName" to accountName
+        )
+        functions.getHttpsCallable("requestWalletWithdrawal").call(callData)
+            .addOnSuccessListener { result ->
+                val data = result.data as? Map<*, *>
+                val newBal = ((data?.get("newBalance") as? Number)?.toDouble())
+                    ?: (_walletBalance.value - amount).coerceAtLeast(0.0)
                 _walletBalance.value = newBal
                 savePref("wallet_balance", newBal)
                 val notifTitle = "Withdrawal Submitted"
                 val notifMsg = "Your withdrawal request of ₦${String.format("%,.2f", amount)} has been submitted for admin processing."
                 addNotification(notifTitle, notifMsg)
                 onComplete(true, null)
-            } else {
-                onComplete(false, errorMsg)
             }
-        }
+            .addOnFailureListener { err ->
+                android.util.Log.w("Withdrawal", "requestWalletWithdrawal failed: ${err.message}")
+                onComplete(false, err.message ?: "Withdrawal request failed. Please try again.")
+            }
     }
 
     fun adminFundUserWallet(userId: String, userName: String, amount: Double, onResult: (Boolean, String) -> Unit) {

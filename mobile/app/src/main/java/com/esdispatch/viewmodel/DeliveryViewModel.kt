@@ -1099,21 +1099,47 @@ class DeliveryViewModel : WalletViewModel() {
 
         val uid = _firebaseUserId.value
         if (uid != null && !uid.startsWith("local_user_")) {
-            com.esdispatch.data.FirebaseManager.saveUserProfileToFirestore(
-                userId = uid,
-                name = _userName.value,
-                email = _userEmail.value,
-                phone = _userPhone.value,
-                role = role,
-                bikeNumber = _bikeNumber.value
-            )
             if (role == "rider") {
+                // C2 remediation: fleet enrollment now requires dispatch
+                // approval. The application is reviewed in the admin portal
+                // and the role is granted server-side on approval.
+                submitRiderApplication(uid)
                 startRiderListeners(uid)
                 checkAndApplyWorkingDaysAutoOnline()
             } else {
+                com.esdispatch.data.FirebaseManager.saveUserProfileToFirestore(
+                    userId = uid,
+                    name = _userName.value,
+                    email = _userEmail.value,
+                    phone = _userPhone.value,
+                    role = role,
+                    bikeNumber = _bikeNumber.value
+                )
                 stopRiderListeners()
             }
         }
+    }
+
+    private fun submitRiderApplication(uid: String) {
+        val functions = com.google.firebase.functions.FirebaseFunctions.getInstance()
+        val callData = hashMapOf(
+            "fullName" to _userName.value,
+            "phone" to _userPhone.value,
+            "bikeNumber" to _bikeNumber.value,
+            "vehicleType" to "Motorcycle"
+        )
+        functions.getHttpsCallable("registerRiderApplication").call(callData)
+            .addOnSuccessListener { result ->
+                val data = result.data as? Map<*, *>
+                val status = data?.get("status") as? String
+                when (status) {
+                    "PENDING" -> showToast("Fleet application submitted. Dispatch will review your enrollment.", ToastType.INFO)
+                    "APPROVED" -> showToast("Your rider profile is active.", ToastType.SUCCESS)
+                }
+            }
+            .addOnFailureListener { err ->
+                android.util.Log.w("RiderApplication", "registerRiderApplication failed: ${err.message}")
+            }
     }
 
     fun setActiveViewMode(mode: String) {
@@ -1670,7 +1696,7 @@ class DeliveryViewModel : WalletViewModel() {
     fun uploadArrivalPhoto(parcelId: String, photoBytes: ByteArray, onComplete: ((Boolean, String?) -> Unit)? = null) {
         try {
             val ref = com.google.firebase.storage.FirebaseStorage.getInstance()
-                .reference.child("arrival_photos/$parcelId-${System.currentTimeMillis()}.jpg")
+                .reference.child("arrival_photos/$parcelId/${System.currentTimeMillis()}.jpg")
             val metadata = com.google.firebase.storage.StorageMetadata.Builder()
                 .setContentType("image/jpeg")
                 .build()
@@ -1773,60 +1799,68 @@ class DeliveryViewModel : WalletViewModel() {
     }
 
     fun verifyDeliveryOtpByRider(parcelId: String, otpInput: String, onComplete: (Boolean, String?) -> Unit) {
-        showPreloader("Verifying handover PIN...")
-        com.esdispatch.data.FirebaseManager.verifyDeliveryOtpByRider(
-            parcelId = parcelId,
-            otpInput = otpInput,
-            onComplete = { success, errorMsg ->
+        showPreloader("Verifying handover code...")
+        // Server-side verification against the salted hash (C3 remediation).
+        val functions = com.google.firebase.functions.FirebaseFunctions.getInstance()
+        val callData = hashMapOf("deliveryId" to parcelId, "otpInput" to otpInput.trim())
+        functions.getHttpsCallable("verifyDeliveryOtp").call(callData)
+            .addOnSuccessListener { result ->
                 hidePreloader()
-                onComplete(success, errorMsg)
+                val data = result.data as? Map<*, *>
+                val success = (data?.get("success") as? Boolean) == true
+                onComplete(
+                    success,
+                    if (success) "Handover verified." else (data?.get("message") as? String) ?: "Verification failed."
+                )
             }
-        )
+            .addOnFailureListener { err ->
+                hidePreloader()
+                onComplete(false, err.message ?: "Verification failed. Please try again.")
+            }
     }
 
     fun ensureDeliveryOtp(parcelId: String, onComplete: ((String) -> Unit)? = null) {
+        val cached = _handoverCodes.value[parcelId] ?: ""
+        if (cached.isNotBlank()) {
+            onComplete?.invoke(cached)
+            return
+        }
         val parcel = _parcels.value.find { it.id == parcelId } ?: _selectedParcel.value
         if (parcel != null && parcel.otpCode.isNotBlank()) {
             onComplete?.invoke(parcel.otpCode)
             return
         }
-        val db = com.esdispatch.data.FirebaseManager.firestore ?: return
-        val docRef = db.collection("deliveries").document(parcelId)
-        docRef.get().addOnSuccessListener { snapshot ->
-            val existingOtp = snapshot.getString("otpCode")
-            if (!existingOtp.isNullOrBlank()) {
-                updateLocalParcelOtp(parcelId, existingOtp)
-                onComplete?.invoke(existingOtp)
-            } else {
-                val newOtp = (1000..9999).random().toString()
-                docRef.update(
-                    mapOf(
-                        "otpCode" to newOtp,
-                        "otpExpiresAt" to (System.currentTimeMillis() + 24 * 60 * 60 * 1000L),
-                        "otpAttempts" to 0
-                    )
-                ).addOnSuccessListener {
-                    updateLocalParcelOtp(parcelId, newOtp)
-                    onComplete?.invoke(newOtp)
-                }
-            }
-        }
+        requestHandoverCode(parcelId, onComplete)
     }
 
     fun reissueDeliveryOtp(parcelId: String, onComplete: ((String) -> Unit)? = null) {
-        val db = com.esdispatch.data.FirebaseManager.firestore ?: return
-        val docRef = db.collection("deliveries").document(parcelId)
-        val newOtp = (1000..9999).random().toString()
-        docRef.update(
-            mapOf(
-                "otpCode" to newOtp,
-                "otpExpiresAt" to (System.currentTimeMillis() + 24 * 60 * 60 * 1000L),
-                "otpAttempts" to 0
-            )
-        ).addOnSuccessListener {
-            updateLocalParcelOtp(parcelId, newOtp)
-            onComplete?.invoke(newOtp)
-        }
+        requestHandoverCode(parcelId, onComplete)
+    }
+
+    /**
+     * Requests the handover code from the server. The code is issued (or
+     * reused while active) by the `getDeliveryOtp` callable, delivered through
+     * the branded email, and returned only to the delivery owner.
+     */
+    private fun requestHandoverCode(parcelId: String, onComplete: ((String) -> Unit)?) {
+        val functions = com.google.firebase.functions.FirebaseFunctions.getInstance()
+        val callData = hashMapOf("deliveryId" to parcelId)
+        functions.getHttpsCallable("getDeliveryOtp").call(callData)
+            .addOnSuccessListener { result ->
+                val data = result.data as? Map<*, *>
+                val code = (data?.get("code") as? String) ?: ""
+                if (code.isNotBlank()) {
+                    updateLocalParcelOtp(parcelId, code)
+                    _handoverCodes.value = _handoverCodes.value + (parcelId to code)
+                    onComplete?.invoke(code)
+                } else {
+                    onComplete?.invoke("")
+                }
+            }
+            .addOnFailureListener { err ->
+                android.util.Log.w("HandoverOtp", "getDeliveryOtp failed: ${err.message}")
+                onComplete?.invoke("")
+            }
     }
 
     private fun updateLocalParcelOtp(parcelId: String, otp: String) {
@@ -2206,60 +2240,81 @@ class DeliveryViewModel : WalletViewModel() {
     private val _activeVerificationOtp = MutableStateFlow<String>("")
     val activeVerificationOtp: StateFlow<String> = _activeVerificationOtp.asStateFlow()
 
-    fun requestAccountVerificationOtp(onResult: (Boolean, String) -> Unit) {
-        val uid = _firebaseUserId.value ?: "USER_${System.currentTimeMillis()}"
-        val secureCode = (100000..999999).random().toString()
-        _activeVerificationOtp.value = secureCode
-        savePref("active_verification_otp", secureCode)
+    // Session-scoped handover codes fetched from the server for the delivery
+    // OWNER only. Firestore documents never carry the plaintext code, so this
+    // map is the sole in-app display source (C3 remediation).
+    private val _handoverCodes = MutableStateFlow<Map<String, String>>(emptyMap())
 
-        val title = "Security Verification Code"
-        val message = "Your ESDispatch verification code has been generated."
-        appContext?.let { ctx ->
+    fun handoverCode(parcelId: String): String {
+        return _handoverCodes.value[parcelId] ?: ""
+    }
+
+    fun requestAccountVerificationOtp(onResult: (Boolean, String) -> Unit) {
+        val email = _userEmail.value.trim()
+        if (email.isBlank() || !email.contains("@")) {
+            onResult(false, "No valid registered email address found for this account.")
+            return
+        }
+        // Server-authoritative flow: the code is generated, hashed, and
+        // emailed by the backend. The app never mints or stores codes.
+        viewModelScope.launch {
             try {
-                com.esdispatch.data.MyFirebaseMessagingService.showNotification(
-                    context = ctx,
-                    title = title,
-                    message = message,
-                    parcelId = "OTP"
+                val functions = com.google.firebase.functions.FirebaseFunctions.getInstance()
+                val callData = hashMapOf(
+                    "email" to email,
+                    "name" to _userName.value.ifBlank { "Valued Client" },
+                    "purpose" to "SIGN_UP"
                 )
+                val task = functions.getHttpsCallable("sendEmailOtp").call(callData)
+                com.google.android.gms.tasks.Tasks.await(task, 15, java.util.concurrent.TimeUnit.SECONDS)
+                if (task.isSuccessful) {
+                    onResult(true, "Verification code sent to your email.")
+                } else {
+                    onResult(false, "Verification service is temporarily unavailable. Please try again in a few minutes.")
+                }
             } catch (e: Exception) {
-                android.util.Log.e("OTPNotif", "Error displaying OTP notification: ${e.message}")
+                android.util.Log.w("AccountVerify", "sendEmailOtp failed: ${e.message}")
+                onResult(false, "We couldn't send your verification code right now. Please try again in a few minutes.")
             }
         }
-
-        com.esdispatch.data.FirebaseManager.saveVerificationOtp(uid, secureCode) { _, _ ->
-            // Successfully mirrored to Firestore (if connected)
-        }
-        onResult(true, "Verification code sent.")
     }
 
     fun confirmAccountVerificationOtp(enteredOtp: String, onResult: (Boolean, String) -> Unit) {
-        val uid = _firebaseUserId.value ?: ""
-        if (enteredOtp.isBlank() || enteredOtp.length < 4) {
-            onResult(false, "Please enter a valid verification code.")
+        val email = _userEmail.value.trim()
+        if (enteredOtp.isBlank() || enteredOtp.length < 6) {
+            onResult(false, "Please enter the 6-digit verification code from your email.")
             return
         }
-        val prefs = appContext?.getSharedPreferences("esdispatch_prefs", android.content.Context.MODE_PRIVATE)
-        val savedOtp = _activeVerificationOtp.value.ifEmpty { prefs?.getString("active_verification_otp", "") ?: "" }
-        if (savedOtp.isNotBlank() && enteredOtp.trim() == savedOtp.trim()) {
-            _isVerified.value = true
-            savePref("is_verified", true)
-            if (uid.isNotBlank()) {
-                com.esdispatch.data.FirebaseManager.verifyOtpCode(uid, enteredOtp.trim()) { _, _ -> }
-            }
-            onResult(true, "Verification successful! You are now a verified VIP member.")
+        if (email.isBlank() || !email.contains("@")) {
+            onResult(false, "No valid registered email address found for this account.")
             return
         }
-        if (uid.isNotBlank()) {
-            com.esdispatch.data.FirebaseManager.verifyOtpCode(uid, enteredOtp.trim()) { success, msg ->
+        // Verification is performed server-side against the hashed record.
+        viewModelScope.launch {
+            try {
+                val functions = com.google.firebase.functions.FirebaseFunctions.getInstance()
+                val callData = hashMapOf(
+                    "email" to email,
+                    "purpose" to "SIGN_UP",
+                    "code" to enteredOtp.trim()
+                )
+                val task = functions.getHttpsCallable("verifyEmailOtp").call(callData)
+                com.google.android.gms.tasks.Tasks.await(task, 15, java.util.concurrent.TimeUnit.SECONDS)
+                val result = task.result?.data as? Map<*, *>
+                val success = (result?.get("success") as? Boolean) == true
                 if (success) {
                     _isVerified.value = true
                     savePref("is_verified", true)
+                    onResult(true, "Verification successful! Your account is now verified.")
+                } else {
+                    val msg = (result?.get("message") as? String)
+                        ?: "Incorrect verification code. Please check and try again."
+                    onResult(false, msg)
                 }
-                onResult(success, msg)
+            } catch (e: Exception) {
+                android.util.Log.w("AccountVerify", "verifyEmailOtp failed: ${e.message}")
+                onResult(false, "We couldn't verify your code right now. Please try again.")
             }
-        } else {
-            onResult(false, "Incorrect verification code. Please check and try again.")
         }
     }
 
@@ -2734,61 +2789,47 @@ class DeliveryViewModel : WalletViewModel() {
     }
 
     private fun seedAiAnalytics() {
-        // Seed initial Risk assessment
+        // C/H3 remediation: no fabricated rider, trend, or risk telemetry is
+        // presented as live data. Analytics start empty and populate only from
+        // real Firestore records; screens render deliberate empty states.
         _aiRiskReport.value = RiskReport(
-            score = 15,
-            riskFactors = listOf("Favorable weather", "Low traffic congestion", "Safe green delivery zones active"),
-            mitigationSuggested = "Standard routing approved. Motorcycle routing suitable.",
-            label = "Safe"
+            score = 0,
+            riskFactors = listOf("Awaiting live telemetry"),
+            mitigationSuggested = "Risk analysis becomes available once fleet telemetry is collected.",
+            label = "No data yet"
         )
-
-        // Seed Admin metrics
-        _riderPerformanceMetrics.value = listOf(
-            RiderPerformanceMetric("RDR-01", "Richard Dheo", 145, 38.5, listOf(4.7, 4.8, 4.8, 4.9, 4.9), 92),
-            RiderPerformanceMetric("RDR-02", "Marcus Vance", 98, 31.0, listOf(4.5, 4.6, 4.6, 4.5, 4.6), 84),
-            RiderPerformanceMetric("RDR-03", "Sandra Croft", 120, 29.5, listOf(4.8, 4.8, 4.7, 4.8, 4.8), 89),
-            RiderPerformanceMetric("RDR-04", "Debra Jaxon", 64, 25.0, listOf(4.2, 4.3, 4.4, 4.3, 4.3), 75),
-            RiderPerformanceMetric("RDR-05", "Akin Ogundipe", 112, 41.0, listOf(4.6, 4.7, 4.7, 4.6, 4.7), 90)
-        )
-
-        _deliveryPerformanceTrends.value = listOf(
-            DeliveryPerformanceTrend("Mon", 340, 98.2, 4200.0),
-            DeliveryPerformanceTrend("Tue", 410, 97.5, 3800.0),
-            DeliveryPerformanceTrend("Wed", 380, 99.0, 4100.0),
-            DeliveryPerformanceTrend("Thu", 450, 96.8, 3950.0),
-            DeliveryPerformanceTrend("Fri", 520, 98.5, 4300.0),
-            DeliveryPerformanceTrend("Sat", 300, 99.4, 4500.0),
-            DeliveryPerformanceTrend("Sun", 240, 99.1, 4800.0)
-        )
-        
-        // Populate initial dynamic values using current empty list
-        updateDynamicAnalytics(emptyList())
+        _riderPerformanceMetrics.value = emptyList()
+        _deliveryPerformanceTrends.value = emptyList()
     }
 
     fun updateDynamicAnalytics(list: List<Parcel>) {
-        // Calculate dynamic hourly demand based on actual database shipments
+        // H3 remediation: analytics are computed ONLY from real shipment
+        // records — no synthetic demand curves or fabricated weather/risk
+        // telemetry is ever presented as live data.
         val hours = listOf("08:00", "10:00", "12:00", "14:00", "16:00", "18:00")
-        val baseMultiplier = list.size.coerceAtLeast(1)
-        
-        _aiDemandPredictions.value = hours.mapIndexed { idx, hour ->
-            // Active shipments in database determine the dynamic bookings load
-            val bookings = (15 + (idx * 6) + (baseMultiplier * 3)) % 60
-            val drivers = ((bookings / 5) + 3).coerceAtMost(bookings).coerceAtLeast(2)
-            val confidence = (85 + (bookings % 15)).coerceIn(80, 99)
-            DemandPrediction(hour, bookings, drivers, confidence)
+        _aiDemandPredictions.value = hours.map { hour ->
+            val hourInt = hour.substringBefore(":").toIntOrNull() ?: -1
+            val bookings = list.count { parcel ->
+                if (parcel.createdAt <= 0L || hourInt < 0) false
+                else {
+                    val cal = java.util.Calendar.getInstance().apply { timeInMillis = parcel.createdAt }
+                    cal.get(java.util.Calendar.HOUR_OF_DAY) == hourInt
+                }
+            }
+            DemandPrediction(hour, bookings, 0, 0)
         }
 
-        // Generate real security and fraud indicators based on database state
+        // Real security checks against database state
         val alerts = mutableListOf<FraudAlert>()
-        
-        // Scan actual database parcels for suspicious duplicate, overweight, or loop configurations
+
+        // Scan actual database parcels for suspicious duplicate or overweight configurations
         list.forEach { parcel ->
             if (parcel.pickupAddress == parcel.deliveryAddress && parcel.pickupAddress.isNotBlank()) {
                 alerts.add(
                     FraudAlert(
                         timestamp = "Just now",
                         userName = parcel.courierName.ifBlank { "Unassigned" },
-                        reason = "Route Loophole Checked: Identical pickup & delivery address for shipment: ${parcel.itemName}",
+                        reason = "Route exception: identical pickup & delivery address for shipment '${parcel.itemName}'",
                         severity = "Flagged",
                         score = 88
                     )
@@ -2797,9 +2838,9 @@ class DeliveryViewModel : WalletViewModel() {
             if (parcel.weight > 35.0) {
                 alerts.add(
                     FraudAlert(
-                        timestamp = "5 mins ago",
+                        timestamp = "Just now",
                         userName = parcel.courierName.ifBlank { "" },
-                        reason = "Overweight Courier Exception: Shipment '${parcel.itemName}' exceeds standard payload weight limits",
+                        reason = "Overweight shipment: '${parcel.itemName}' exceeds standard payload limits",
                         severity = "Under Review",
                         score = 76
                     )
@@ -2809,32 +2850,31 @@ class DeliveryViewModel : WalletViewModel() {
 
         _aiFraudAlerts.value = alerts
 
-        // DYNAMIC RISK REPORT: Compute live risk score based on active alerts and package status
-        val baseRisk = (alerts.size * 12).coerceIn(10, 95)
-        val finalRiskScore = if (list.any { it.status == com.esdispatch.data.ParcelStatus.CANCELLED }) (baseRisk + 15).coerceAtMost(95) else baseRisk
-        
+        // Risk score reflects ONLY the count of real detected exceptions.
+        val finalRiskScore = if (alerts.isEmpty()) 0 else (alerts.size * 12).coerceIn(10, 95)
+
         _aiRiskReport.value = when {
-            finalRiskScore < 30 -> RiskReport(
-                score = finalRiskScore,
-                riskFactors = listOf("Favorable weather", "Low traffic congestion", "Safe green delivery zones active"),
-                mitigationSuggested = "Standard routing approved. Motorcycle routing suitable.",
-                label = "Safe"
+            finalRiskScore == 0 -> RiskReport(
+                score = 0,
+                riskFactors = listOf("No route exceptions detected in current shipments"),
+                mitigationSuggested = "Standard dispatch routing in effect.",
+                label = "Clear"
             )
             finalRiskScore < 65 -> RiskReport(
                 score = finalRiskScore,
-                riskFactors = listOf("Rainfall on key expressways", "Moderate traffic build-up", "Increased route volumes"),
-                mitigationSuggested = "Recommend main arterial highway corridors. Add 10-15m buffer.",
+                riskFactors = listOf("${alerts.size} shipment exception${if (alerts.size == 1) "" else "s"} detected"),
+                mitigationSuggested = "Review flagged shipments in the dispatch queue.",
                 label = "Caution"
             )
             else -> RiskReport(
                 score = finalRiskScore,
-                riskFactors = listOf("Severe weather warnings", "Heavy traffic saturation", "Active road hazards"),
-                mitigationSuggested = "Delay secondary dispatches. Enforce cargo-strapping and wet weather gear.",
+                riskFactors = listOf("${alerts.size} shipment exception${if (alerts.size == 1) "" else "s"} detected"),
+                mitigationSuggested = "Dispatch review required before further assignments.",
                 label = "High Risk"
             )
         }
 
-        // DYNAMIC WEEKLY PERFORMANCE TRENDS: Compute live weekly performance trends from actual database parcels
+        // Weekly performance trends computed from actual database parcels
         val weekdays = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
         val sdf = java.text.SimpleDateFormat("EEE", java.util.Locale.US)
 
@@ -4530,17 +4570,8 @@ class DeliveryViewModel : WalletViewModel() {
             return
         }
 
-        // 1. Generate 6-digit cryptographic security passcode
-        val secureCode = (100000..999999).random().toString()
-        _activeVerificationOtp.value = secureCode
-        savePref("active_verification_otp", secureCode)
-
-        // 2. Persist OTP in Firestore under users/{uid}/verification_otp/current
-        if (uid.isNotBlank()) {
-            com.esdispatch.data.FirebaseManager.saveVerificationOtp(uid, secureCode) { _, _ -> }
-        }
-
-        // 3. Dispatch luxury HTML passcode email via Cloud Functions / REST endpoint
+        // Server-authoritative: the 6-digit passcode is generated, hashed, and
+        // emailed by the backend. The app never mints or stores the code.
         viewModelScope.launch(Dispatchers.IO) {
             var dispatched = false
             var lastError = ""
@@ -4552,8 +4583,7 @@ class DeliveryViewModel : WalletViewModel() {
                 val callData = hashMapOf(
                     "email" to email,
                     "name" to name,
-                    "purpose" to "SIGN_UP",
-                    "code" to secureCode
+                    "purpose" to "SIGN_UP"
                 )
                 val task = functions.getHttpsCallable("sendEmailOtp").call(callData)
                 com.google.android.gms.tasks.Tasks.await(task, 10, java.util.concurrent.TimeUnit.SECONDS)
@@ -4592,7 +4622,6 @@ class DeliveryViewModel : WalletViewModel() {
                             put("email", email)
                             put("name", name)
                             put("userId", uid)
-                            put("otp", secureCode)
                             put("verificationLink", verificationLink)
                         }
                         val requestBody = jsonPayload.toString().toRequestBody("application/json".toMediaType())
@@ -4989,7 +5018,6 @@ class DeliveryViewModel : WalletViewModel() {
                             courierLastUpdated = previous.courierLastUpdated
                         )
                     } else updatedParcel
-
                     _selectedParcel.value = resolvedParcel
                     // Immediately propagate status & telemetry to user parcels flow so customer views update in real-time
                     _parcels.update { list ->
@@ -5017,7 +5045,10 @@ class DeliveryViewModel : WalletViewModel() {
                                     (telemetry.latitude != 0.0 || telemetry.longitude != 0.0) &&
                                     (telemetry.accuracy <= 250f || telemetry.accuracy == 0f || current.courierLatitude == null)) {
                                     
-                                    val withTelemetry = current.copy(
+                                    val withTelemetry = if (telemetry.activeBookingId.isNotBlank() && telemetry.activeBookingId != parcelId &&
+                                        !(current.batchId.isNotBlank() && current.batchId == telemetry.activeBatchId)) {
+                                        current.copy(courierLatitude = null, courierLongitude = null, courierLastUpdated = 0L)
+                                    } else current.copy(
                                         courierLatitude = telemetry.latitude,
                                         courierLongitude = telemetry.longitude,
                                         courierBearing = telemetry.bearing,
@@ -5850,7 +5881,6 @@ class DeliveryViewModel : WalletViewModel() {
             progress = 0.0f,
             userId = uid ?: "",
             additionalStops = draft.stops.filter { it.isNotBlank() }.joinToString("|"),
-            otpCode = (1000..9999).random().toString(),
             category = draft.selectedCategory.ifBlank { draft.selectedService.ifBlank { "Standard" } },
             createdAt = System.currentTimeMillis(),
             pickupLat = effectivePickupLat,
@@ -5931,31 +5961,56 @@ class DeliveryViewModel : WalletViewModel() {
                 onComplete?.invoke(false, "Insufficient wallet balance (₦${String.format("%,.0f", cost)} needed).")
                 return
             }
-            // Atomic server-controlled operation: debits wallet, creates delivery doc, and writes double-entry ledger in ONE transaction
-            com.esdispatch.data.FirebaseManager.executeAtomicBookingTransaction(
-                userId = uid,
-                cost = cost,
-                parcel = newParcel,
-                serviceTitle = "Parcel Delivery (${draft.selectedService})"
-            ) { success, message, newBalance ->
-                if (!success) {
-                    isBookingSubmissionInProgress = false
-                    hidePreloader()
-                    com.esdispatch.util.SoundManager.playErrorBuzz()
-                    onComplete?.invoke(false, message)
-                    return@executeAtomicBookingTransaction
-                }
-                _walletBalance.value = newBalance
-                savePref("wallet_balance", newBalance)
-                finalizeBookingLocally(newParcel)
-                viewModelScope.launch {
-                    kotlinx.coroutines.delay(1000)
+            // Server-authoritative booking (C1/C11 remediation): the wallet
+            // debit, payment reference, and delivery document are produced
+            // atomically by the `createBooking` Cloud Function.
+            val bookingPayload = hashMapOf<String, Any>(
+                "itemName" to newParcel.itemName,
+                "pickupAddress" to newParcel.pickupAddress,
+                "pickupLat" to (newParcel.pickupLat ?: 0.0),
+                "pickupLng" to (newParcel.pickupLng ?: 0.0),
+                "deliveryAddress" to newParcel.deliveryAddress,
+                "deliveryLat" to (newParcel.deliveryLat ?: 0.0),
+                "deliveryLng" to (newParcel.deliveryLng ?: 0.0),
+                "senderName" to newParcel.senderName,
+                "senderPhone" to newParcel.senderPhone,
+                "receiverName" to newParcel.receiverName,
+                "receiverPhone" to newParcel.receiverPhone,
+                "price" to newParcel.price,
+                "deliveryFee" to newParcel.price,
+                "packageWeight" to newParcel.weight,
+                "itemCategory" to newParcel.category,
+                "declaredValue" to newParcel.declaredValue,
+                "senderEmail" to newParcel.senderEmail,
+                "additionalStops" to newParcel.additionalStops,
+                "type" to draft.selectedService
+            )
+            val functions = com.google.firebase.functions.FirebaseFunctions.getInstance()
+            functions.getHttpsCallable("createBooking").call(bookingPayload)
+                .addOnSuccessListener { result ->
+                    val data = result.data as? Map<*, *>
+                    val ids = (data?.get("deliveryIds") as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+                    val serverId = ids.firstOrNull()
+                    val newBalance = ((data?.get("newBalance") as? Number)?.toDouble())
+                        ?: (_walletBalance.value - cost).coerceAtLeast(0.0)
+                    _walletBalance.value = newBalance
+                    savePref("wallet_balance", newBalance)
+                    if (serverId != null) {
+                        finalizeBookingLocally(newParcel.copy(id = serverId))
+                    } else {
+                        finalizeBookingLocally(newParcel)
+                    }
                     hidePreloader()
                     onComplete?.invoke(true, "Booking confirmed")
                 }
-            }
+                .addOnFailureListener { err ->
+                    isBookingSubmissionInProgress = false
+                    hidePreloader()
+                    com.esdispatch.util.SoundManager.playErrorBuzz()
+                    onComplete?.invoke(false, err.message ?: "Booking failed. Please try again.")
+                }
         } else {
-            // Unauthenticated / guest fallback: offline booking
+            // Unauthenticated / guest fallback: offline booking (unpaid draft)
             if (_walletBalance.value < cost) {
                 isBookingSubmissionInProgress = false
                 hidePreloader()
@@ -5965,12 +6020,9 @@ class DeliveryViewModel : WalletViewModel() {
             }
             _walletBalance.value -= cost
             savePref("wallet_balance", _walletBalance.value)
-            finalizeBookingLocally(newParcel)
-            viewModelScope.launch {
-                kotlinx.coroutines.delay(1000)
-                hidePreloader()
-                onComplete?.invoke(true, "Booking confirmed (offline)")
-            }
+            finalizeBookingLocally(newParcel.copy(paymentStatus = "PENDING_PAYMENT"))
+            hidePreloader()
+            onComplete?.invoke(true, "Booking confirmed (offline)")
         }
     }
 
@@ -6010,7 +6062,7 @@ class DeliveryViewModel : WalletViewModel() {
         val batchId = "BATCH-" + java.util.UUID.randomUUID().toString().replace("-", "").take(8).uppercase()
         val costPerStop = totalCost / stops.size
 
-        fun executeBatchCreation() {
+        fun executeBatchCreation(serverIds: List<String>? = null, serverPaid: Boolean = false) {
             val newParcels = mutableListOf<Parcel>()
             val newNotifications = mutableListOf<NotificationItem>()
             val currentTime = System.currentTimeMillis()
@@ -6024,8 +6076,8 @@ class DeliveryViewModel : WalletViewModel() {
             }
 
             stops.forEachIndexed { index, stop ->
-                val parcelId = "PC-" + java.util.UUID.randomUUID().toString().replace("-", "").take(8).uppercase() + "-${index + 1}"
-                val otp = (1000..9999).random().toString()
+                val parcelId = serverIds?.getOrNull(index)
+                    ?: ("PC-" + java.util.UUID.randomUUID().toString().replace("-", "").take(8).uppercase() + "-${index + 1}")
                 val itemName = if (stop.itemName.isNotBlank()) stop.itemName else "Batch Delivery #${index + 1}"
                 val effectivePickup = if (stop.pickupAddress.isNotBlank()) stop.pickupAddress else pickupAddress
                 val stopPickupCoords = if (stop.pickupAddress.isNotBlank()) resolveAddressCoords(stop.pickupAddress) else sharedPickupCoords
@@ -6046,7 +6098,6 @@ class DeliveryViewModel : WalletViewModel() {
                     price = costPerStop,
                     progress = 0.0f,
                     userId = uid ?: "",
-                    otpCode = otp,
                     additionalStops = "batch:$batchId",
                     batchId = batchId,
                     isBatch = true,
@@ -6054,6 +6105,7 @@ class DeliveryViewModel : WalletViewModel() {
                     batchItemIndex = index,
                     batchTotalItems = stops.size,
                     verificationStatus = "UNVERIFIED",
+                    paymentStatus = if (serverPaid) "PAID" else "PENDING_PAYMENT",
                     senderEmail = _userEmail.value,
                     pickupLat = stopPickupCoords?.first,
                     pickupLng = stopPickupCoords?.second,
@@ -6065,7 +6117,7 @@ class DeliveryViewModel : WalletViewModel() {
                 val notif = NotificationItem(
                     id = "NT-" + java.util.UUID.randomUUID().toString().replace("-", "").take(8).uppercase() + "-${index + 1}",
                     title = "Batch Delivery #${index + 1} Booked",
-                    message = "Stop '$itemName' (${com.esdispatch.util.FormatUtils.formatDisplayTrackingId(parcelId)}) to ${stop.destinationAddress} booked successfully! Handover PIN: $otp",
+                    message = "Stop '$itemName' (${com.esdispatch.util.FormatUtils.formatDisplayTrackingId(parcelId)}) to ${stop.destinationAddress} booked successfully! The handover code will be issued when your courier arrives.",
                     time = "Just now",
                     parcelId = parcelId,
                     timestamp = currentTime
@@ -6100,9 +6152,15 @@ class DeliveryViewModel : WalletViewModel() {
                 repository?.saveParcels(newParcels)
                 newNotifications.forEach { repository?.saveNotification(it) }
                 repository?.saveTransaction(batchTx)
-                newParcels.forEach { 
-                    syncParcel(it)
-                    com.esdispatch.data.FirebaseManager.broadcastNewDispatchAlert(it)
+                // Server-created batches already exist in Firestore; only
+                // guest drafts need to be synced upstream.
+                if (serverIds == null) {
+                    newParcels.forEach {
+                        syncParcel(it)
+                        com.esdispatch.data.FirebaseManager.broadcastNewDispatchAlert(it)
+                    }
+                } else {
+                    newParcels.forEach { com.esdispatch.data.FirebaseManager.broadcastNewDispatchAlert(it) }
                 }
                 
                 // Record parent batch in Firestore
@@ -6146,24 +6204,50 @@ class DeliveryViewModel : WalletViewModel() {
         }
 
         if (uid != null) {
-            com.esdispatch.data.FirebaseManager.updateUserWalletBalance(uid, -totalCost) { success, newBal ->
-                if (!success) {
-                    val currentBal = _walletBalance.value
-                    if (currentBal >= totalCost) {
-                        val fallbackBal = (currentBal - totalCost).coerceAtLeast(0.0)
-                        _walletBalance.value = fallbackBal
-                        savePref("wallet_balance", fallbackBal)
-                        executeBatchCreation()
-                        return@updateUserWalletBalance
-                    }
-                    com.esdispatch.util.SoundManager.playErrorBuzz()
-                    onComplete?.invoke(false, "Wallet debit failed — batch booking was NOT created. Please retry.")
-                    return@updateUserWalletBalance
-                }
-                _walletBalance.value = newBal
-                savePref("wallet_balance", newBal)
-                executeBatchCreation()
+            // Server-authoritative batch booking: wallet debit, payment
+            // reference and delivery documents are created atomically by the
+            // `createBooking` Cloud Function.
+            val stopsPayload = stops.mapIndexed { index, stop ->
+                val itemName = if (stop.itemName.isNotBlank()) stop.itemName else "Batch Delivery #${index + 1}"
+                val effectivePickup = if (stop.pickupAddress.isNotBlank()) stop.pickupAddress else pickupAddress
+                hashMapOf<String, Any>(
+                    "itemName" to itemName,
+                    "pickupAddress" to effectivePickup,
+                    "deliveryAddress" to stop.destinationAddress,
+                    "senderName" to senderName.ifBlank { _userName.value.ifBlank { "Engraced Member" } },
+                    "senderPhone" to sPhone,
+                    "receiverName" to stop.recipientName.ifBlank { "Recipient #${index + 1}" },
+                    "receiverPhone" to stop.recipientPhone,
+                    "price" to costPerStop,
+                    "deliveryFee" to costPerStop,
+                    "packageWeight" to (stop.weight.toDoubleOrNull() ?: 1.5),
+                    "senderEmail" to _userEmail.value,
+                    "batchId" to batchId,
+                    "batchItemIndex" to index,
+                    "batchTotalItems" to stops.size
+                )
             }
+            val functions = com.google.firebase.functions.FirebaseFunctions.getInstance()
+            val callData = hashMapOf(
+                "stops" to stopsPayload,
+                "totalCost" to totalCost,
+                "batchId" to batchId
+            )
+            functions.getHttpsCallable("createBooking").call(callData)
+                .addOnSuccessListener { result ->
+                    val data = result.data as? Map<*, *>
+                    val ids = (data?.get("deliveryIds") as? List<*>)?.mapNotNull { it as? String }
+                    val newBal = ((data?.get("newBalance") as? Number)?.toDouble())
+                        ?: (_walletBalance.value - totalCost).coerceAtLeast(0.0)
+                    _walletBalance.value = newBal
+                    savePref("wallet_balance", newBal)
+                    executeBatchCreation(ids, serverPaid = true)
+                    onComplete?.invoke(true, "Batch delivery booked successfully!")
+                }
+                .addOnFailureListener { err ->
+                    com.esdispatch.util.SoundManager.playErrorBuzz()
+                    onComplete?.invoke(false, err.message ?: "Batch booking failed. Please try again.")
+                }
         } else {
             _walletBalance.value -= totalCost
             savePref("wallet_balance", _walletBalance.value)
@@ -6630,8 +6714,11 @@ class DeliveryViewModel : WalletViewModel() {
                                 if (isDelivered && !_pushAlertsDelivered.value) continue
                                 if (isCancelled && !_pushAlertsCancelled.value) continue
 
-                                val otpCode = doc.getString("otpCode") ?: ""
-                                val pinNotice = if (otpCode.isNotBlank()) " Handover PIN: $otpCode. Give this PIN to the courier upon delivery." else ""
+                                // C3 remediation: handover codes are never
+                                // echoed in notification bodies (lockscreen
+                                // visibility is PUBLIC). The code is delivered
+                                // via email/app to the delivery owner only.
+                                val pinNotice = " The handover code was sent to your email and is available in the app."
 
                                 val trkId = com.esdispatch.util.FormatUtils.formatDisplayTrackingId(id)
                                 val (title, message) = when (status) {
@@ -6791,9 +6878,8 @@ class DeliveryViewModel : WalletViewModel() {
         }
 
         val uid = _firebaseUserId.value
-        val newBalance = _walletBalance.value + refundAmount
-        _walletBalance.value = newBalance
-        savePref("wallet_balance", newBalance)
+        // The authoritative refund is applied server-side by the
+        // `cancelDelivery` callable; no optimistic local wallet mutation.
 
         if (refundAmount > 0) {
             val feeNote = if (deductedFee > 0) " (₦${String.format("%,.0f", deductedFee)} dispatch fee deducted)" else ""
@@ -6810,20 +6896,23 @@ class DeliveryViewModel : WalletViewModel() {
             _transactions.value = listOf(refundTx) + _transactions.value
 
             if (uid != null) {
-                com.esdispatch.data.FirebaseManager.updateUserWalletBalance(uid, refundAmount) { ok, newBal ->
-                    if (ok) {
-                        _walletBalance.value = newBal
-                        savePref("wallet_balance", newBal)
+                // Server-authoritative cancellation & refund (C11 remediation):
+                // the status update, dispatch-fee deduction, wallet refund, and
+                // ledger entry are produced by the `cancelDelivery` callable.
+                val functions = com.google.firebase.functions.FirebaseFunctions.getInstance()
+                functions.getHttpsCallable("cancelDelivery")
+                    .call(hashMapOf("deliveryId" to parcelId, "reason" to reason))
+                    .addOnSuccessListener { result ->
+                        val data = result.data as? Map<*, *>
+                        val serverBalance = (data?.get("newBalance") as? Number)?.toDouble()
+                        if (serverBalance != null) {
+                            _walletBalance.value = serverBalance
+                            savePref("wallet_balance", serverBalance)
+                        }
                     }
-                }
-                com.esdispatch.data.FirebaseManager.recordLedgerTransaction(
-                    userId = uid,
-                    amount = refundAmount,
-                    title = "Refund: ${parcel.itemName}$feeNote",
-                    isTopUp = true,
-                    reference = parcel.id,
-                    status = "SUCCESS"
-                ) { _ -> }
+                    .addOnFailureListener { err ->
+                        android.util.Log.w("CancelDelivery", "Server cancellation failed: ${err.message}")
+                    }
             }
         }
 
@@ -7464,56 +7553,28 @@ class DeliveryViewModel : WalletViewModel() {
 
     private fun runLocalAIFallback(text: String): String {
         val lower = text.lowercase()
+        // H3 remediation: the offline fallback never fabricates telemetry
+        // (weather, risk scores, or ride estimates). It routes users to real
+        // in-app actions instead.
         return when {
-            lower.contains("send") || lower.contains("book") || lower.contains("deliver") -> {
-                val isHeavy = lower.contains("heavy") || lower.contains("kg") || lower.contains("box") || lower.contains("furniture")
-                val addressMatch = if (lower.contains("airport")) "Airport Road, GRA, Benin City" else "Ring Road, Central Benin City"
-                val vehicleRec = if (isHeavy) "Van or Truck (recommended for large packages)" else "Motorcycle (standard courier dispatch)"
-                
-                "**Booking Estimation**:\n" +
-                "• **Service Zone**: Benin City Central Hub\n" +
-                "• **Suggested Landmark**: $addressMatch\n" +
-                "• **Suggested Vehicle**: $vehicleRec\n" +
-                "• **Estimated Fare**: ₦${if(isHeavy) "7,500.00" else "2,500.00"}\n" +
-                "To place a delivery, tap 'Send Package' on your dashboard."
-            }
-            lower.contains("status") || lower.contains("track") || lower.contains("where") || lower.contains("rolex") || lower.contains("mac") -> {
-                val active = _parcels.value.firstOrNull { it.status == ParcelStatus.TRANSIT || it.status == ParcelStatus.OUT_FOR_DELIVERY }
+            lower.contains("send") || lower.contains("book") || lower.contains("deliver") ->
+                "To place a delivery, tap 'Send Package' on your dashboard and follow the booking steps. For a fare estimate, complete the quick quote form."
+            lower.contains("status") || lower.contains("track") || lower.contains("where") -> {
+                val active = _parcels.value.firstOrNull {
+                    it.status == ParcelStatus.TRANSIT || it.status == ParcelStatus.OUT_FOR_DELIVERY
+                }
                 if (active != null) {
-                    "**Live Delivery Status for ${com.esdispatch.util.FormatUtils.formatDisplayTrackingId(active.id)}**:\n" +
-                    "• **Item**: ${active.itemName}\n" +
-                    "• **Current Rider**: ${active.courierName.ifBlank { "Assigned Fleet Rider" }}\n" +
-                    "• **Operating Hub**: Benin City Fleet Hub\n" +
-                    "• **Status**: ${active.status.name.replace('_', ' ')}\n" +
-                    "Would you like to view real-time tracking on the map?"
+                    "Your shipment '${active.itemName}' (${com.esdispatch.util.FormatUtils.formatDisplayTrackingId(active.id)}) is ${active.status.name.replace('_', ' ')}. Open the tracking view for live map details."
                 } else {
-                    "No active shipments are currently in transit. Your past shipments have been successfully delivered to their destinations."
+                    "No active shipments are currently in transit. Open Order History to review past deliveries."
                 }
             }
-            lower.contains("rider") || lower.contains("richard") || lower.contains("musa") || lower.contains("best") -> {
-                "**Fleet Assignment Protocol**:\n" +
-                "ESDispatch couriers are dynamically assigned based on proximity, capacity, and active route schedule in Benin City.\n" +
-                "Once you place a booking, the nearest verified fleet rider will be assigned immediately."
-            }
-            lower.contains("risk") || lower.contains("weather") || lower.contains("rain") || lower.contains("flood") -> {
-                val score = if (_aiTrafficCongested.value) 68 else 15
-                "**Dispatch Risk Assessment**:\n" +
-                "• **Operating Zone**: Benin City, Edo State\n" +
-                "• **Risk Score**: $score/100 (${if(score > 50) "Moderate Risk" else "Safe"})\n" +
-                "• **Weather**: Clear, dry skies\n" +
-                "• **Mitigation**: Standard motorcycle dispatch active."
-            }
-            lower.contains("cancel") -> {
-                "**Cancellation Assistance**:\n" +
-                "To cancel your booking, please navigate to your active shipment screen and tap 'Cancel Request', or connect with Dispatch Support in the Live Support tab. If a rider has already picked up your package, custody exception rules apply."
-            }
-            lower.contains("change") -> {
-                "**Address Modification**:\n" +
-                "To modify your delivery destination within Benin City, please update your order in the tracking view before the rider begins the transit stage."
-            }
-            else -> {
-                "Welcome to ESDispatch — Premium Logistics & Dispatch operating in Benin City, Edo State. How can I assist you with your booking, parcel tracking, or fleet dispatch today?"
-            }
+            lower.contains("cancel") ->
+                "To cancel your booking, open the active shipment screen and tap 'Cancel Request'. If a rider has already picked up your package, custody exception rules apply."
+            lower.contains("change") ->
+                "To modify your delivery destination, update your order in the tracking view before the rider begins the transit stage."
+            else ->
+                "AI assistance is currently offline. Use the dashboard to book, track, or manage your shipments, or contact dispatch support."
         }
     }
 
@@ -8334,7 +8395,7 @@ class DeliveryViewModel : WalletViewModel() {
             "isVerified" to isAutoApproved,
             "status" to status,
             "ownerName" to (_userName.value.ifBlank { "Store Owner" }),
-            "email" to (_userEmail.value.ifBlank { "vendor@esdispatch.app" }),
+            "email" to (_userEmail.value.ifBlank { "vendor@engracedsmile.com" }),
             "commissionRate" to 8.5,
             "vendorBalance" to 0.0,
             "totalSales" to 0,
@@ -8612,331 +8673,97 @@ class DeliveryViewModel : WalletViewModel() {
             onComplete(false, "Your cart is empty!")
             return
         }
-        val firestore = com.esdispatch.data.FirebaseManager.firestore ?: com.google.firebase.firestore.FirebaseFirestore.getInstance()
         val userId = _firebaseUserId.value ?: "guest_user"
-        val subtotal = currentCart.sumOf { it.item.price * it.quantity }
-        val deliveryFee = 1500.0
-        val pointsDiscount = com.esdispatch.utils.LoyaltyRewards.pointsDiscount(_loyaltyPoints.value, redeemPoints)
-        val grandTotal = (subtotal + deliveryFee - pointsDiscount).coerceAtLeast(0.0)
-        val orderRef = "ORD-MKT-" + java.util.UUID.randomUUID().toString().replace("-", "").take(10).uppercase()
         val isWalletPayment = paymentMethod == "Wallet"
-        var effectiveSubtotal = subtotal
-        var effectiveGrandTotal = grandTotal
-        val splits = mutableListOf<VendorSplitRecord>()
-
+        val pointsDiscount = com.esdispatch.utils.LoyaltyRewards.pointsDiscount(_loyaltyPoints.value, redeemPoints)
         if (isWalletPayment && userId == "guest_user") {
             onComplete(false, "Please sign in to pay with your wallet.")
             return
         }
 
+        // Server-authoritative checkout (C1/C11 remediation): stock
+        // decrements, wallet debits, vendor splits, the order document, the
+        // delivery document and the payment ledger are all produced by the
+        // `createMarketplaceBooking` Cloud Function.
         viewModelScope.launch {
-            val error = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                try {
-                    // 1) Fresh stock + price verification straight from the live product docs
-                    val freshProducts = mutableMapOf<String, com.google.firebase.firestore.DocumentSnapshot>()
-                    for (c in currentCart) {
-                        if (c.item.id !in freshProducts) {
-                            freshProducts[c.item.id] = com.google.android.gms.tasks.Tasks.await(
-                                firestore.collection("marketplace_products").document(c.item.id).get()
-                            )
-                        }
-                    }
-                    for (c in currentCart) {
-                        val snap = freshProducts[c.item.id]
-                            ?: return@withContext "One of your items is no longer available. Please refresh your cart."
-                        if (!snap.exists()) {
-                            return@withContext "${c.item.title} is no longer available. Please remove it from your cart."
-                        }
-                        val remaining = snap.getLong("stock") ?: Long.MAX_VALUE
-                        if (remaining < c.quantity) {
-                            return@withContext "Only $remaining left in stock for ${c.item.title}. Please reduce the quantity."
-                        }
-                    }
-                    effectiveSubtotal = currentCart.sumOf { c ->
-                        (freshProducts[c.item.id]?.getSafeDouble("price", c.item.price) ?: c.item.price) * c.quantity
-                    }
-                    effectiveGrandTotal = (effectiveSubtotal + deliveryFee - pointsDiscount).coerceAtLeast(0.0)
-
-                    // 2) Per-vendor commission split resolved from live store docs
-                    for ((key, items) in currentCart.groupBy { c -> c.item.vendorId.ifBlank { c.item.vendorStore } }) {
-                        val first = items.first().item
-                        val vendorId = first.vendorId
-                        var storeId = ""
-                        var rate = 8.5
-                        if (vendorId.isNotBlank()) {
-                            val storeSnap = com.google.android.gms.tasks.Tasks.await(
-                                firestore.collection("marketplace_stores").document(vendorId).get()
-                            )
-                            if (storeSnap.exists()) {
-                                storeId = storeSnap.id
-                                rate = storeSnap.getSafeDouble("commissionRate", 8.5)
-                            }
-                        } else {
-                            val legacyQuery = com.google.android.gms.tasks.Tasks.await(
-                                firestore.collection("marketplace_stores").whereEqualTo("storeName", key).limit(1).get()
-                            )
-                            if (!legacyQuery.isEmpty) {
-                                storeId = legacyQuery.documents[0].id
-                                rate = legacyQuery.documents[0].getSafeDouble("commissionRate", 8.5)
-                            }
-                        }
-                        val vendorSubtotal = items.sumOf { c ->
-                            (freshProducts[c.item.id]?.getSafeDouble("price", c.item.price) ?: c.item.price) * c.quantity
-                        }
-                        val commissionAmount = vendorSubtotal * (rate / 100.0)
-                        splits.add(
-                            VendorSplitRecord(
-                                storeId = storeId,
-                                storeName = first.vendorStore,
-                                subtotal = vendorSubtotal,
-                                commissionRate = rate,
-                                commissionAmount = commissionAmount,
-                                vendorPayout = vendorSubtotal - commissionAmount
-                            )
-                        )
-                    }
-
-                    // 3) Wallet eligibility gate before any write
-                    if (isWalletPayment) {
-                        val walletSnap = com.google.android.gms.tasks.Tasks.await(
-                            firestore.collection("users").document(userId).get()
-                        )
-                        val balance = walletSnap.getSafeDouble("walletBalance", _walletBalance.value)
-                        if (balance < effectiveGrandTotal) {
-                            val short = effectiveGrandTotal - balance
-                            return@withContext "Insufficient wallet balance. You need NGN ${String.format("%,.2f", short)} more to complete this purchase."
-                        }
-                    }
-
-                    // 4) Atomic commit: stock, wallet debit, vendor credits, order, dispatch record, ledger
-                    com.google.android.gms.tasks.Tasks.await(
-                        firestore.runTransaction { txn ->
-                            // --- ALL READS FIRST ---
-                            val productUpdates = currentCart.map { c ->
-                                val productRef = firestore.collection("marketplace_products").document(c.item.id)
-                                val snap = try {
-                                    txn.get(productRef)
-                                } catch (e: Exception) {
-                                    throw com.google.firebase.firestore.FirebaseFirestoreException(
-                                        "${c.item.title} is no longer available.",
-                                        com.google.firebase.firestore.FirebaseFirestoreException.Code.ABORTED
-                                    )
-                                }
-                                val remaining = snap.getLong("stock") ?: 0L
-                                if (remaining < c.quantity) {
-                                    throw com.google.firebase.firestore.FirebaseFirestoreException(
-                                        "Insufficient stock for ${c.item.title}. Please refresh your cart.",
-                                        com.google.firebase.firestore.FirebaseFirestoreException.Code.ABORTED
-                                    )
-                                }
-                                Pair(productRef, c.quantity)
-                            }
-
-                            val userRef = if ((isWalletPayment || (redeemPoints && pointsDiscount > 0)) && userId != "guest_user") {
-                                firestore.collection("users").document(userId)
-                            } else null
-
-                            val userSnap = userRef?.let {
-                                try {
-                                    txn.get(it)
-                                } catch (e: Exception) {
-                                    throw com.google.firebase.firestore.FirebaseFirestoreException(
-                                        "Wallet verification failed. Please try again.",
-                                        com.google.firebase.firestore.FirebaseFirestoreException.Code.ABORTED
-                                    )
-                                }
-                            }
-
-                            if (isWalletPayment && userSnap != null) {
-                                val balance = userSnap.getSafeDouble("walletBalance", 0.0)
-                                if (balance < effectiveGrandTotal) {
-                                    throw com.google.firebase.firestore.FirebaseFirestoreException(
-                                        "Insufficient wallet balance.",
-                                        com.google.firebase.firestore.FirebaseFirestoreException.Code.ABORTED
-                                    )
-                                }
-                            }
-
-                            // --- ALL WRITES AFTER READS ---
-                            productUpdates.forEach { (productRef, qty) ->
-                                txn.update(productRef, "stock", com.google.firebase.firestore.FieldValue.increment(-qty.toLong()))
-                            }
-
-                            if (isWalletPayment && userRef != null) {
-                                txn.update(userRef, "walletBalance", com.google.firebase.firestore.FieldValue.increment(-effectiveGrandTotal))
-                            }
-                            if (redeemPoints && pointsDiscount > 0 && userRef != null) {
-                                txn.update(userRef, "loyaltyPoints", com.google.firebase.firestore.FieldValue.increment(-_loyaltyPoints.value.toLong().coerceAtLeast(0L)))
-                            }
-
-                            val primaryVendorId = splits.firstOrNull()?.storeId?.ifBlank { currentCart.firstOrNull()?.item?.vendorId } ?: ""
-                            txn.set(
-                                firestore.collection("marketplace_orders").document(orderRef),
-                                mapOf<String, Any>(
-                                    "orderId" to orderRef,
-                                    "userId" to userId,
-                                    "userName" to (_userName.value.ifEmpty { "Valued Customer" }),
-                                    "userPhone" to _userPhone.value,
-                                    "shippingAddress" to address,
-                                    "paymentMethod" to paymentMethod,
-                                    "status" to "PAID",
-                                    "vendorId" to primaryVendorId,
-                                    "storeId" to primaryVendorId,
-                                    "subtotal" to effectiveSubtotal,
-                                    "deliveryFee" to deliveryFee,
-                                    "pointsDiscount" to pointsDiscount,
-                                    "pointsRedeemed" to (redeemPoints && pointsDiscount > 0),
-                                    "totalAmount" to effectiveGrandTotal,
-                                    "commissionRate" to (splits.firstOrNull()?.commissionRate ?: 8.5),
-                                    "commissionAmount" to splits.sumOf { it.commissionAmount },
-                                    "vendorPayout" to splits.sumOf { it.vendorPayout },
-                                    "vendorSplits" to splits.map { s ->
-                                        mapOf<String, Any>(
-                                            "storeId" to s.storeId,
-                                            "storeName" to s.storeName,
-                                            "subtotal" to s.subtotal,
-                                            "commissionRate" to s.commissionRate,
-                                            "commissionAmount" to s.commissionAmount,
-                                            "vendorPayout" to s.vendorPayout
-                                        )
-                                    },
-                                    "items" to currentCart.map { c ->
-                                        mapOf<String, Any>(
-                                            "productId" to c.item.id,
-                                            "title" to c.item.title,
-                                            "category" to c.item.category,
-                                            "price" to (freshProducts[c.item.id]?.getSafeDouble("price", c.item.price) ?: c.item.price),
-                                            "quantity" to c.quantity,
-                                            "vendorStore" to c.item.vendorStore,
-                                            "vendorId" to c.item.vendorId
-                                        )
-                                    },
-                                    "createdAt" to com.google.firebase.Timestamp.now()
-                                )
-                            )
-                            val fulfilmentStore = splits.firstOrNull()?.storeName ?: "ESDispatch Fleet Supplies"
-                            val dispatchDoc = mapOf<String, Any>(
-                                "id" to orderRef,
-                                "itemName" to currentCart.joinToString { c -> c.item.title },
-                                "imageUrl" to currentCart.first().item.imageUrl,
-                                "status" to "PENDING",
-                                "pickupAddress" to "$fulfilmentStore - Vendor Fulfilment Point",
-                                "deliveryAddress" to address,
-                                "senderName" to fulfilmentStore,
-                                "senderPhone" to "",
-                                "receiverName" to (_userName.value.ifEmpty { "Valued Customer" }),
-                                "receiverPhone" to _userPhone.value,
-                                "quantity" to currentCart.sumOf { c -> c.quantity },
-                                "weight" to 2.5,
-                                "price" to effectiveGrandTotal,
-                                "deliveryFee" to deliveryFee,
-                                "type" to "MARKETPLACE",
-                                "progress" to 0.0f,
-                                "userId" to userId,
-                                "riderId" to "",
-                                "courierName" to "",
-                                "courierPhone" to "",
-                                "otpCode" to "",
-                                "otpVerified" to false,
-                                "isRated" to false,
-                                "tipAmount" to 0.0,
-                                "createdAt" to com.google.firebase.Timestamp.now(),
-                                "lastUpdated" to System.currentTimeMillis()
-                            )
-                            txn.set(firestore.collection("deliveries").document(orderRef), dispatchDoc)
-                            if (userId != "guest_user") {
-                                txn.set(
-                                    firestore.collection("users").document(userId).collection("deliveries").document(orderRef),
-                                    dispatchDoc
-                                )
-                            }
-                            val txRef = "TX-MKT-" + java.util.UUID.randomUUID().toString().replace("-", "").take(10).uppercase()
-                            val paymentTitle = if (isWalletPayment) "Marketplace Order (Wallet)" else "Marketplace Order (Paystack)"
-                            val txDoc = mapOf<String, Any>(
-                                "id" to txRef,
-                                "userId" to userId,
-                                "title" to paymentTitle,
-                                "amount" to effectiveGrandTotal,
-                                "isTopUp" to false,
-                                "type" to "DEBIT",
-                                "status" to "SUCCESS",
-                                "reference" to txRef,
-                                "date" to "Today",
-                                "timestamp" to System.currentTimeMillis(),
-                                "createdAt" to com.google.firebase.Timestamp.now()
-                            )
-                            if (userId != "guest_user") {
-                                txn.set(
-                                    firestore.collection("users").document(userId).collection("transactions").document(orderRef),
-                                    txDoc
-                                )
-                            }
-                            txn.set(
-                                firestore.collection("transactions").document(txRef),
-                                txDoc
-                            )
-                            null
-                        }
-                    )
-                    null
-                } catch (e: Exception) {
-                    e.message ?: "Checkout failed. Please try again."
-                }
-            }
-
-            if (error != null) {
-                onComplete(false, error)
-                return@launch
-            }
-
-            if (isWalletPayment) {
-                _walletBalance.value = (_walletBalance.value - effectiveGrandTotal).coerceAtLeast(0.0)
-                val newTx = Transaction(
-                    id = "TX-" + System.currentTimeMillis().toString().takeLast(8),
-                    title = "Marketplace Order (${currentCart.size} items)",
-                    date = "Today",
-                    amount = -effectiveGrandTotal,
-                    isTopUp = false,
-                    type = "DEBIT",
-                    reference = "MKT-" + System.currentTimeMillis().toString().takeLast(8),
-                    userId = userId
+            try {
+                val functions = com.google.firebase.functions.FirebaseFunctions.getInstance()
+                val paystackRef = if (paymentMethod.startsWith("Paystack:")) paymentMethod.removePrefix("Paystack:") else ""
+                val callData = hashMapOf(
+                    "items" to currentCart.map { hashMapOf("productId" to it.item.id, "quantity" to it.quantity) },
+                    "shippingAddress" to address,
+                    "paymentMethod" to (if (paystackRef.isNotBlank()) "Paystack" else "Wallet"),
+                    "paystackReference" to paystackRef,
+                    "redeemPoints" to redeemPoints,
+                    "pointsDiscount" to pointsDiscount,
+                    "pointsToRedeem" to _loyaltyPoints.value,
+                    "deliveryFee" to 1500.0
                 )
-                val currentTxList = _transactions.value.toMutableList()
-                currentTxList.add(0, newTx)
-                _transactions.value = currentTxList
-            }
-            if (redeemPoints && pointsDiscount > 0 && _loyaltyPoints.value >= com.esdispatch.utils.LoyaltyRewards.DISCOUNT_THRESHOLD_POINTS) {
-                val remaining = (_loyaltyPoints.value - com.esdispatch.utils.LoyaltyRewards.DISCOUNT_POINTS_COST).coerceAtLeast(0)
-                _loyaltyPoints.value = remaining
-                savePref("loyalty_points", remaining)
-                val uid = _firebaseUserId.value
-                if (uid != null) {
-                    viewModelScope.launch {
-                        com.esdispatch.data.FirebaseManager.syncLoyaltyToFirestore(uid, remaining, _deliveryCount.value)
+                val task = functions.getHttpsCallable("createMarketplaceBooking").call(callData)
+                com.google.android.gms.tasks.Tasks.await(task, 60, java.util.concurrent.TimeUnit.SECONDS)
+                if (!task.isSuccessful) {
+                    onComplete(false, task.exception?.message ?: "Checkout failed. Please try again.")
+                    return@launch
+                }
+                val data = task.result?.data as? Map<*, *>
+                val success = (data?.get("success") as? Boolean) == true
+                if (!success) {
+                    onComplete(false, (data?.get("message") as? String) ?: "Checkout failed. Please try again.")
+                    return@launch
+                }
+                val orderId = (data?.get("orderId") as? String) ?: ""
+                val serverBalance = (data?.get("newBalance") as? Number)?.toDouble()
+                val amountCharged = (data?.get("amountCharged") as? Number)?.toDouble() ?: 0.0
+                val vendorStoreIds = (data?.get("vendorStoreIds") as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+
+                if (isWalletPayment) {
+                    _walletBalance.value = serverBalance ?: (_walletBalance.value - amountCharged).coerceAtLeast(0.0)
+                    savePref("wallet_balance", _walletBalance.value)
+                    val newTx = Transaction(
+                        id = "TX-" + System.currentTimeMillis().toString().takeLast(8),
+                        title = "Marketplace Order (${currentCart.size} items)",
+                        date = "Today",
+                        amount = -amountCharged,
+                        isTopUp = false,
+                        type = "DEBIT",
+                        reference = orderId.ifBlank { "MKT-" + System.currentTimeMillis().toString().takeLast(8) },
+                        userId = userId
+                    )
+                    val currentTxList = _transactions.value.toMutableList()
+                    currentTxList.add(0, newTx)
+                    _transactions.value = currentTxList
+                }
+                if (redeemPoints && pointsDiscount > 0 && _loyaltyPoints.value >= com.esdispatch.utils.LoyaltyRewards.DISCOUNT_THRESHOLD_POINTS) {
+                    val remaining = (_loyaltyPoints.value - com.esdispatch.utils.LoyaltyRewards.DISCOUNT_POINTS_COST).coerceAtLeast(0)
+                    _loyaltyPoints.value = remaining
+                    savePref("loyalty_points", remaining)
+                    val uid = _firebaseUserId.value
+                    if (uid != null) {
+                        viewModelScope.launch {
+                            com.esdispatch.data.FirebaseManager.syncLoyaltyToFirestore(uid, remaining, _deliveryCount.value)
+                        }
                     }
                 }
-            }
-            _cartItems.value = emptyList()
-            clearCart()
-            for (split in splits) {
-                if (split.storeId.isNotBlank()) {
-                    com.esdispatch.data.FirebaseManager.sendNotificationToUser(
-                        split.storeId,
-                        "New Marketplace Order!",
-                        "You have a new paid order #$orderRef. Prepare and dispatch it now to keep earning!"
-                    )
+                _cartItems.value = emptyList()
+                clearCart()
+                // Vendor notifications are sent server-side by the callable.
+                if (vendorStoreIds.isNotEmpty()) {
+                    android.util.Log.d("MarketplaceCheckout", "Vendor notifications dispatched by server for ${vendorStoreIds.size} store(s).")
                 }
+                showInAppNotification(
+                    "Order Placed!",
+                    "Order #$orderId confirmed. Track it live from your dashboard."
+                )
+                addNotification(
+                    "Order Placed!",
+                    "Order #$orderId confirmed. Track it live from your dashboard.",
+                    orderId
+                )
+                onComplete(true, "Order #$orderId placed successfully! Tracking live at #$orderId")
+            } catch (e: Exception) {
+                android.util.Log.w("MarketplaceCheckout", "createMarketplaceBooking failed: ${e.message}")
+                onComplete(false, e.message ?: "Checkout failed. Please try again.")
             }
-            showInAppNotification(
-                "Order Placed!",
-                "Order #$orderRef confirmed. Track it live from your dashboard."
-            )
-            addNotification(
-                "Order Placed!",
-                "Order #$orderRef confirmed. Track it live from your dashboard.",
-                orderRef
-            )
-            onComplete(true, "Order #$orderRef placed successfully! Tracking live at #$orderRef")
         }
     }
 
@@ -9381,9 +9208,13 @@ object SecurityUtils {
         val cleanStored = storedPinOrHash.trim()
         val hashedInput = hashPin(cleanInput)
         if (cleanStored.equals(hashedInput, ignoreCase = true)) return true
-        if (cleanStored == cleanInput) return true
+        // Plaintext matches are NEVER accepted (C6 remediation). Legacy
+        // XOR-encoded values are accepted once purely to migrate them to the
+        // salted-hash format; the caller re-encrypts via encryptPin().
         val legacyDecrypted = decryptLegacy(cleanStored)
-        if (legacyDecrypted == cleanInput) return true
+        if (legacyDecrypted.isNotEmpty() && legacyDecrypted != cleanStored && legacyDecrypted == cleanInput) {
+            return true
+        }
         return false
     }
     

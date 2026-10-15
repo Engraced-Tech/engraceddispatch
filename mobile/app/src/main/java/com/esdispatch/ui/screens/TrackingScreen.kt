@@ -363,7 +363,11 @@ fun ActiveTrackingScreen(
     }
     val activeParcel = remember(selectedParcel, activeParcels) {
         // Keep the selected shipment visible through completion; do not jump to another order.
-        selectedParcel ?: activeParcels.firstOrNull()
+        if (selectedParcel != null) {
+            activeParcels.find { it.id == selectedParcel?.id } ?: selectedParcel
+        } else {
+            activeParcels.firstOrNull()
+        }
     }
 
     val trackingTargetId = activeParcel?.id ?: selectedParcel?.id
@@ -3706,7 +3710,7 @@ fun reverseGeocodeAddress(context: android.content.Context, lat: Double, lng: Do
             try {
                 val url = java.net.URL("https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng&addressdetails=1")
                 val urlConnection = url.openConnection() as java.net.HttpURLConnection
-                urlConnection.setRequestProperty("User-Agent", "ESDispatchAndroidApp/1.0 (reachheytek@gmail.com)")
+                urlConnection.setRequestProperty("User-Agent", "ESDispatchAndroidApp/1.0")
                 urlConnection.connectTimeout = 3000
                 urlConnection.readTimeout = 3000
                 val response = urlConnection.inputStream.bufferedReader().use { it.readText() }

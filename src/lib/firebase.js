@@ -1,4 +1,4 @@
-import { initializeApp, getApps } from "firebase/app";
+﻿import { initializeApp, getApps } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { initializeAppCheck, ReCaptchaV3Provider } from "firebase/app-check";
@@ -14,7 +14,7 @@ const getEnv = (key) => {
 };
 
 const firebaseConfig = {
-  apiKey: getEnv("VITE_FIREBASE_API_KEY") || getEnv("NEXT_PUBLIC_FIREBASE_API_KEY") || "AIzaSyCxVWlXrlsXSrJvzlxNiQ4lcBcP05E73Ts",
+  apiKey: getEnv("VITE_FIREBASE_API_KEY") || getEnv("NEXT_PUBLIC_FIREBASE_API_KEY") || "AIzaSyDa7J-JOfQIW4ZZo59jjEBiLUSRyvdK6uY",
   authDomain: getEnv("VITE_FIREBASE_AUTH_DOMAIN") || getEnv("NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN") || "engraceddispatch-ffba4.firebaseapp.com",
   projectId: getEnv("VITE_FIREBASE_PROJECT_ID") || getEnv("NEXT_PUBLIC_FIREBASE_PROJECT_ID") || "engraceddispatch-ffba4",
   storageBucket: getEnv("VITE_FIREBASE_STORAGE_BUCKET") || getEnv("NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET") || "engraceddispatch-ffba4.firebasestorage.app",

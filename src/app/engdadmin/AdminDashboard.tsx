@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 import React, { useState, useEffect, useCallback, useRef, useId, useMemo } from "react";
 import { createPortal } from "react-dom";
 
@@ -696,10 +696,10 @@ function DashboardTab({ deliveries, activeUsers, customers, drivers, pendingDeli
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="stagger-1"><StatCard icon={<Users className="w-4 h-4 text-[#FFB800]" />} label="TOTAL USERS" value={activeUsers.length.toString()} sub={customers.length + " customers Â· " + drivers.length + " drivers"} /></div>
-        <div className="stagger-2"><StatCard icon={<Package className="w-4 h-4 text-[#FFB800]" />} label="SHIPMENTS" value={deliveries.length.toString()} sub={pendingDeliveries.length + " pending Â· " + delivered.length + " delivered"} /></div>
-        <div className="stagger-3"><StatCard icon={<DollarSign className="w-4 h-4 text-[#FFB800]" />} label="REVENUE" value={fmt(totalRevenue)} sub={fmt(totalTips) + " in tips Â· " + referrals.length + " referrals"} /></div>
-        <div className="stagger-4"><StatCard icon={<Activity className="w-4 h-4 text-[#FFB800]" />} label="ONLINE" value={(activeUsers.filter((u: any) => u.isOnline).length).toString()} sub={drivers.filter((d: any) => d.isOnline).length + " drivers Â· " + (activeUsers.filter((u: any) => u.role === "customer" && u.isOnline).length) + " customers"} /></div>
+        <div className="stagger-1"><StatCard icon={<Users className="w-4 h-4 text-[#FFB800]" />} label="TOTAL USERS" value={activeUsers.length.toString()} sub={customers.length + " customers · " + drivers.length + " drivers"} /></div>
+        <div className="stagger-2"><StatCard icon={<Package className="w-4 h-4 text-[#FFB800]" />} label="SHIPMENTS" value={deliveries.length.toString()} sub={pendingDeliveries.length + " pending · " + delivered.length + " delivered"} /></div>
+        <div className="stagger-3"><StatCard icon={<DollarSign className="w-4 h-4 text-[#FFB800]" />} label="REVENUE" value={fmt(totalRevenue)} sub={fmt(totalTips) + " in tips · " + referrals.length + " referrals"} /></div>
+        <div className="stagger-4"><StatCard icon={<Activity className="w-4 h-4 text-[#FFB800]" />} label="ONLINE" value={(activeUsers.filter((u: any) => u.isOnline).length).toString()} sub={drivers.filter((d: any) => d.isOnline).length + " drivers · " + (activeUsers.filter((u: any) => u.role === "customer" && u.isOnline).length) + " customers"} /></div>
       </div>
 
       <section>
@@ -2813,6 +2813,46 @@ function UsersTab({ activeUsers, deliveries = [], searchQuery, db, addLog, addTo
     pinsGenerated: 0
   });
 
+  // ============================================================
+  // RIDER APPLICATIONS (C2 remediation): fleet enrollment now
+  // requires explicit admin approval. The Cloud Function
+  // `onRiderApplicationApproved` grants the role on APPROVED.
+  // ============================================================
+  const [riderApps, setRiderApps] = useState<any[]>([]);
+  const [processingAppId, setProcessingAppId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!db) return;
+    const unsub = onSnapshot(
+      query(collection(db, "rider_applications"), where("status", "==", "PENDING")),
+      (snap) => {
+        const rows: any[] = [];
+        snap.forEach((docSnap) => rows.push({ id: docSnap.id, ...docSnap.data() }));
+        setRiderApps(rows);
+      },
+      (err) => console.warn("[RiderApps] listener error:", err)
+    );
+    return () => unsub();
+  }, [db]);
+
+  const handleRiderApplication = async (appId: string, decision: "APPROVED" | "REJECTED") => {
+    if (!db) return;
+    setProcessingAppId(appId);
+    try {
+      await updateDoc(doc(db, "rider_applications", appId), {
+        status: decision,
+        approvedBy: currentUser?.uid || "admin",
+        processedAt: new Date().toISOString(),
+      });
+      addLog("RIDER_APPLICATION", `${decision} rider application ${appId}`);
+      addToast?.("success", decision === "APPROVED" ? "Rider approved and enrolled in the fleet." : "Rider application rejected.");
+    } catch (err: any) {
+      addToast?.("error", `Failed to process application: ${err?.message || "Unknown error"}`);
+    } finally {
+      setProcessingAppId(null);
+    }
+  };
+
   useEffect(() => {
     if (!fundUser) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -3415,10 +3455,10 @@ function UsersTab({ activeUsers, deliveries = [], searchQuery, db, addLog, addTo
             const curStatus = (dData.status || "").toUpperCase();
             const subUpdates: any = {};
 
-            // Check PIN
+            // Check PIN (C3 remediation: handover codes are minted server-side
+            // when the courier arrives — no plaintext client-generated PINs).
             if ((!dData.otpCode || dData.otpCode.trim() === "") && !["DELIVERED", "CANCELLED"].includes(curStatus)) {
-              subUpdates.otpCode = Math.floor(1000 + Math.random() * 9000).toString();
-              stats.pinsGenerated++;
+              console.info(`[UsersTab] Handover code for ${dId} will auto-issue on courier arrival.`);
             }
 
             // Check completed status
@@ -3610,6 +3650,47 @@ function UsersTab({ activeUsers, deliveries = [], searchQuery, db, addLog, addTo
           <span className="text-[11px] font-medium text-gray-500 dark:text-gray-400 mt-0.5 block">{vendorsCount} stores • {adminsCount} staff</span>
         </div>
       </div>
+
+      {/* Rider Enrollment Applications (C2 remediation) */}
+      {riderApps.length > 0 && (
+        <div className="bg-white dark:bg-[#1a1a1a] border border-[#FFB800]/40 rounded-2xl p-4 sm:p-5 shadow-xs">
+          <div className="flex items-center gap-2 mb-3">
+            <UserPlus className="w-4 h-4 text-[#FFB800]" />
+            <span className="text-xs font-black uppercase tracking-wider text-[#111] dark:text-white">Fleet Rider Applications</span>
+            <span className="px-2 py-0.5 rounded-full bg-[#FFB800] text-[#111] text-[10px] font-black">{riderApps.length} pending</span>
+          </div>
+          <div className="space-y-2">
+            {riderApps.map((app) => (
+              <div key={app.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-gray-200 dark:border-white/10 rounded-xl p-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-bold text-[#111] dark:text-white truncate">{app.fullName || "Fleet applicant"}</div>
+                  <div className="text-[11px] text-gray-600 dark:text-gray-400 truncate">
+                    {app.email || "no email"} {app.phone ? `• ${app.phone}` : ""} {app.bikeNumber ? `• Bike: ${app.bikeNumber}` : ""}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    disabled={processingAppId === app.id}
+                    onClick={() => handleRiderApplication(app.id, "APPROVED")}
+                    className="h-9 px-4 bg-[#FFB800] hover:bg-[#FFB800]/90 text-[#111] rounded-xl text-xs font-black transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    Approve
+                  </button>
+                  <button
+                    type="button"
+                    disabled={processingAppId === app.id}
+                    onClick={() => handleRiderApplication(app.id, "REJECTED")}
+                    className="h-9 px-4 bg-gray-100 dark:bg-[#222] hover:bg-gray-200 dark:hover:bg-[#2c2c2c] text-gray-700 dark:text-gray-300 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Filter Chips & Search Bar */}
       <div className="bg-white dark:bg-[#1a1a1a] border border-gray-200 dark:border-white/10 rounded-2xl p-3 sm:p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 shadow-xs">
@@ -5063,11 +5144,9 @@ function ShipmentsTab({ deliveries, drivers, users, addressRegistry = [], search
           const rootUpdates: any = {};
 
           // Check 1: Active delivery missing OTP Code (legacy bookings)
+          // C3 remediation: no client-generated PINs — codes auto-issue server-side.
           if ((!dData.otpCode || dData.otpCode.trim() === "") && !["DELIVERED", "CANCELLED"].includes(curStatus)) {
-            const newPin = Math.floor(1000 + Math.random() * 9000).toString();
-            rootUpdates.otpCode = newPin;
-            generatedPinCount++;
-            logMsg(`Generated Handover PIN (${newPin}) for active shipment ${idShort(delId)}`);
+            logMsg(`Handover code for ${idShort(delId)} will auto-issue on courier arrival.`);
           }
 
           // Check 2: Completed timestamp exists but status is stuck in ARRIVED / TRANSIT / OUT_FOR_DELIVERY
@@ -6938,7 +7017,7 @@ function ShipmentsTab({ deliveries, drivers, users, addressRegistry = [], search
                       { value: "", label: "Leave Unassigned (Pending Broadcast)" },
                       ...drivers.map(d => ({
                         value: d.id,
-                        label: `${d.name} (${d.phone || "Active"} Â· ${getRiderActiveLoad(d.id)} active drops)`
+                        label: `${d.name} (${d.phone || "Active"} · ${getRiderActiveLoad(d.id)} active drops)`
                       }))
                     ]}
                     className="w-full"
@@ -7969,8 +8048,7 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
             const subUpdates: any = {};
 
             if ((!dData.otpCode || dData.otpCode.trim() === "") && !["DELIVERED", "CANCELLED"].includes(curStatus)) {
-              subUpdates.otpCode = Math.floor(1000 + Math.random() * 9000).toString();
-              generatedPins++;
+              console.info(`[UsersTab] Handover code for ${dId} will auto-issue on courier arrival.`);
             }
             if (dData.completedTimestamp && curStatus !== "DELIVERED") {
               subUpdates.status = "DELIVERED";
@@ -8021,8 +8099,7 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
         const rootUpdates: any = {};
 
         if ((!dData.otpCode || dData.otpCode.trim() === "") && !["DELIVERED", "CANCELLED"].includes(curStatus)) {
-          rootUpdates.otpCode = Math.floor(1000 + Math.random() * 9000).toString();
-          pinCount++;
+          console.info(`[UsersTab] Handover code for ${delId} will auto-issue on courier arrival.`);
         }
 
         if (dData.completedTimestamp && curStatus !== "DELIVERED") {
@@ -9063,7 +9140,7 @@ function MarketplaceTab({ products, stores, orders, payoutRequests, db, addLog, 
 
     {/* Metric Stat Cards */}
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      <StatCard icon={<Package className="w-4 h-4 text-[#FFB800]" />} label="CATALOG PRODUCTS" value={totalProducts.toString()} sub={`${products.filter(p => p.status === "In Stock").length} in stock Â· ${products.filter(p => p.status === "Low Stock").length} low stock`} />
+      <StatCard icon={<Package className="w-4 h-4 text-[#FFB800]" />} label="CATALOG PRODUCTS" value={totalProducts.toString()} sub={`${products.filter(p => p.status === "In Stock").length} in stock · ${products.filter(p => p.status === "Low Stock").length} low stock`} />
       <StatCard icon={<Store className="w-4 h-4 text-[#FFB800]" />} label="ACTIVE VENDOR STORES" value={approvedStores.length.toString()} sub={`${pendingStores.length} pending enlistment requests`} />
       <StatCard icon={<DollarSign className="w-4 h-4 text-[#FFB800]" />} label="MARKETPLACE SALES" value={`₦${totalMarketplaceSales.toLocaleString()}`} sub={`${orders.length} completed transactions`} />
       <StatCard icon={<Percent className="w-4 h-4 text-[#FFB800]" />} label="AVG COMMISSION" value="8.5%" sub="Revenue split per store transaction" />
@@ -9194,11 +9271,11 @@ function MarketplaceTab({ products, stores, orders, payoutRequests, db, addLog, 
                           <span className="px-2 py-0.5 bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300 rounded-lg font-black text-[9px]">VERIFIED</span>
                         )}
                       </div>
-                      {s.isDemo && <div className="text-[10px] text-amber-800 dark:text-amber-400 font-black mt-0.5">Staging Â· Hidden from catalog</div>}
+                      {s.isDemo && <div className="text-[10px] text-amber-800 dark:text-amber-400 font-black mt-0.5">Staging · Hidden from catalog</div>}
                     </td>
                     <td className="p-4">
                       <div className="font-bold text-[#111] dark:text-white">{s.ownerName}</div>
-                      <div className="text-[10px] text-gray-600 dark:text-gray-400 font-medium">{s.email} Â· {s.phone}</div>
+                      <div className="text-[10px] text-gray-600 dark:text-gray-400 font-medium">{s.email} · {s.phone}</div>
                     </td>
                     <td className="p-4"><span className="px-3 py-1 bg-gray-100 dark:bg-[#222] text-[#111] dark:text-white rounded-full font-bold text-[10px]">{s.category}</span></td>
                     <td className="p-4 font-bold text-sm text-[#111] dark:text-white">{s.commissionRate}%</td>
@@ -9596,7 +9673,7 @@ function MarketplaceTab({ products, stores, orders, payoutRequests, db, addLog, 
         <div className="bg-white dark:bg-[#1a1a1a] rounded-3xl p-6 w-full max-w-lg shadow-2xl border border-black/10 dark:border-white/10 space-y-4 animate-scale-in">
           <div className="flex items-center justify-between pb-2 border-b border-black/10 dark:border-white/10">
             <h3 className="text-lg font-black text-[#111] dark:text-white flex items-center gap-2">
-              <Pencil className="w-5 h-5 text-[#FFB800]" /> Edit Store Â· {editStoreTarget.storeName}
+              <Pencil className="w-5 h-5 text-[#FFB800]" /> Edit Store · {editStoreTarget.storeName}
             </h3>
             <button onClick={() => setEditStoreTarget(null)} className="text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-white transition-colors">
               <X className="w-5 h-5" />

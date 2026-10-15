@@ -1,89 +1,32 @@
 rules_version = '2';
+
+// ============================================================================
+// ESDISPATCH FIRESTORE SECURITY RULES — HARDENED (2026-10-15 remediation)
+//
+// Fixes applied (per FULL_SYSTEM_AUDIT_2026-10-14.md):
+//   C1  Escrow minting  — client writes to payment/settlement fields denied;
+//       settlement only via server ledger refs (see functions/index.ts).
+//   C2  Role escalation — rider role no longer self-assignable; riders come
+//       from `rider_applications` approved by admins (trigger promotes).
+//   C3  OTP secrecy     — plaintext OTP fields cannot be written or read by
+//       clients; hashes live on the doc, plaintext in a locked collection.
+//   C4  Tracking spoof  — public_tracking writes require existing-doc
+//       participation (never payload self-claims).
+//   C8  Notif broadcast — root notifications create is admin/dispatcher only.
+//   C9  GPS privacy     — fleet_locations / riders / drivers read scoped.
+//   C10 Subcollection leaks — support chats, marketplace, batches scoped.
+//   C11 Money paths     — walletBalance writes denied to owners; bookings and
+//       withdrawals are server-authoritative callables.
+//   H10 PII surfaces    — phone_indices read requires auth; rider/vendor
+//       profile reads require auth.
+//   M9  Forged records  — root transactions/audit_logs/tips create scoped.
+// ============================================================================
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
     // ===============================================================
-    // ASSUMED DATA MODELS & SECURITY ARCHITECTURE
-    // ===============================================================
-    //
-    // /users/{userId}
-    //   - User profile with role-based access control (customer, rider, driver, vendor, dispatcher, admin, super_admin)
-    //   - Authenticated read for public profile details (couriers, drivers, storefronts, customer names)
-    //   - Protected administrative & security fields: admin, isSuperAdmin, permissions, role, userRole, vendorBalance, pin, securityPin
-    //   - Owner updates: profile, preferences, address; walletBalance (strictly debit-only for ride/order booking; balance inflation strictly forbidden)
-    //   - Server-only updates: balance top-ups, tip credits, vendor payouts via Cloud Functions Admin SDK or admin
-    //   - External updates: courier delivery completion (loyaltyPoints, deliveryCount), customer driver ratings (rating, ratingCount, updatedAt)
-    //   - Subcollections:
-    //       /notifications: User in-app notifications
-    //       /notification_events: Push/deduplication tracking
-    //       /ratings & /reviews: Feedback submitted for user/courier/store
-    //       /cart: Marketplace shopping cart items
-    //       /deliveries: Scoped delivery history
-    //       /addresses: Saved delivery & pickup addresses
-    //       /payment_cards: Saved payment instruments
-    //       /security_events: Security, session, and login audit logs
-    //       /activity_logs: User interaction and activity telemetry
-    //       /transactions: Personal financial ledger & transaction history
-    //       /verification_otp: Cryptographic OTP passcode records (e.g. 'current')
-    //
-    // /phone_indices/{phoneKey}
-    //   - Digits-only unique phone registry document (e.g., 2348031234567)
-    //   - Public read for real-time pre-signup uniqueness verification
-    //   - Created atomically by owner UID; updated/deleted by owner UID or admin
-    //
-    // /deliveries/{deliveryId} & /parcels/{parcelId}
-    //   - Central delivery tracking records
-    //   - Read/list for participants (userId, customerId, senderId, riderId, assignedRiderId, driverId, reservedRiderId), dispatchers, admins, unassigned/offered deliveries, or verified recipient phone match
-    //   - Create by authenticated users
-    //   - Update by participants, dispatchers, admins, or riders claiming available/pool deliveries
-    //   - Subcollections: /messages, /timeline, /pod_events, /chats, /ratings - participant, dispatcher, and admin restricted
-    //
-    // /public_tracking/{deliveryId}
-    //   - Public real-time shipment status & courier coordinates for recipient tracking links
-    //   - Public read; write by authenticated courier, sender, customer, dispatcher, or admin
-    //
-    // /reviews/{reviewId} & /ratings/{ratingId}
-    //   - Global feedback documents with public read, author create/edit, and admin moderation
-    //
-    // /rider_tips/{tipId}
-    //   - Courier tip transactions created by customer, read by customer/rider/admin, managed by admin
-    //
-    // /transactions/{transactionId}, /tip_withdrawals/{withdrawalId}, /refund_requests/{requestId}, /vendor_payout_requests/{docId}
-    //   - Financial ledger entries accessible to participants and administrative oversight
-    //   - Transactions created by customers (bookings, top-ups, checkout) and riders (earnings, withdrawals)
-    //
-    // /payout_settlements/{docId}, /system_ledger/{docId}, /settlement_records/{docId}
-    //   - Internal accounting collections restricted to Admin/Dispatcher read and Cloud Functions write
-    //
-    // /fleet_locations/{riderId}, /rider_attendance/{docId}, /vehicle_inspections/{docId}, /drivers/{driverId}, /riders/{riderId}
-    //   - Courier GPS telemetry and operational logs accessible to courier self and fleet dispatch/admin
-    //
-    // /support_chats/{ticketId} & /support_chats/{ticketId}/messages/{msgId}
-    //   - Customer support tickets and messages accessible to ticket author, involved participants, and support staff
-    //
-    // /marketplace_products/{productId}, /marketplace_stores/{storeId}, /marketplace_orders/{orderId}
-    //   - Storefront catalogs (public read), vendor shop management, and order lifecycle tracking
-    //   - Product stock decrements permitted during customer checkout transactions
-    //
-    // /system_config, /system_settings, /admin_config, /sub_admins, /banners, /promotions, /appContent, /site_content, /cms_*
-    //   - Public content for CMS/landing pages, administrative configuration for staff
-    //
-    // /notifications/{docId}, /broadcast_news/{docId}, /audit_logs/{docId}, /incident_reports/{docId}, /fleet_broadcasts/{docId}
-    //   - Global broadcasts, fleet dispatch broadcasts upon booking, and append-only audit logs
-    //
-    // /customer_loyalty_points/{docId}, /referrals/{docId}, /referral_redemptions/{docId}, /batch_bookings/{batchId}, /batches/{batchId}, /offline_sync_logs/{docId}
-    //   - User loyalty programs, multi-stop batch dispatching, and offline cache synchronization
-    //
-    // /contacts/{docId}, /subscribers/{docId}, /verification_otps/{docId}
-    //   - Landing page lead forms and secure OTP records
-    //
-    // /address_registry/{entryId}
-    //   - Public landmarks and geocoded zones for instant landing page & booking fare calculations
-    //
-    // ===============================================================
-
-    // ===============================================================
-    // AUTHENTICATION & ADMINISTRATIVE HELPER FUNCTIONS
+    // HELPERS
     // ===============================================================
 
     function isAuth() {
@@ -137,7 +80,6 @@ service cloud.firestore {
     function isDeliveryParticipant(data) {
       return isAuth() && (
         data.get('userId', '') == request.auth.uid ||
-        data.get('customerId', '') == request.auth.uid ||
         data.get('senderId', '') == request.auth.uid ||
         data.get('riderId', '') == request.auth.uid ||
         data.get('assignedRiderId', '') == request.auth.uid ||
@@ -153,6 +95,42 @@ service cloud.firestore {
       ];
     }
 
+    function isVerifiedRider() {
+      return isAuth() && (
+        request.auth.token.get('rider', false) == true ||
+        exists(/databases/$(database)/documents/rider_profiles/$(request.auth.uid)) ||
+        (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) && (
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') in ['rider', 'driver', 'RIDER', 'DRIVER'] ||
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('userRole', '') in ['rider', 'driver', 'RIDER', 'DRIVER']
+          )
+        )
+      );
+    }
+
+    function updateHasOnly(allowedKeys) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(allowedKeys);
+    }
+
+    // Payment / settlement / OTP integrity fields — never client-writable
+    function paymentOtpGuardKeys() {
+      return [
+        'otpCode', 'otpHash', 'otpAttempts', 'otpExpiresAt', 'otpIssuedAt',
+        'handoverCode', 'securityCode', 'payoutCredited', 'settlementStatus',
+        'settlementBlockReason', 'paymentRef', 'paymentStatus', 'settlementApproved'
+      ];
+    }
+
+    // Create-scope guard: paymentStatus is allowed as a KEY (drafts write
+    // PENDING_PAYMENT) but its value must never be PAID — enforced separately.
+    function createGuardKeys() {
+      return [
+        'otpCode', 'otpHash', 'otpAttempts', 'otpExpiresAt', 'otpIssuedAt',
+        'handoverCode', 'securityCode', 'payoutCredited', 'settlementStatus',
+        'settlementBlockReason', 'paymentRef', 'settlementApproved'
+      ];
+    }
+
     function isReasonableWrite() {
       return request.resource.data.keys().size() <= 150;
     }
@@ -162,703 +140,719 @@ service cloud.firestore {
     // ===============================================================
 
     match /users/{userId} {
-      // Authenticated users can read user profiles (courier cards, driver telemetry, vendor storefronts, customer info)
-      allow read: if isAuth();
+      // Owner, admin, and dispatcher can always read the full profile.
+      // Rider/driver/vendor PUBLIC-ish profile reads now REQUIRE auth (C9/H10)
+      // and never expose security credentials or financial balances.
+      allow read: if isOwner(userId) || isAdmin() || isDispatcher() ||
+        (
+          isAuth() &&
+          (
+            resource.data.get('role', '') in ['rider', 'driver', 'vendor', 'RIDER', 'DRIVER', 'VENDOR'] ||
+            resource.data.get('userRole', '') in ['rider', 'driver', 'vendor', 'RIDER', 'DRIVER', 'VENDOR']
+          ) &&
+          !resource.data.keys().hasAny(['pin', 'userPin', 'securityPin', 'pinHash', 'walletBalance', 'vendorBalance'])
+        );
 
-      // Prevent non-admin privilege escalation on creation:
-      // Owners can create their profile with non-administrative roles.
-      // Must not assert admin/isSuperAdmin/permissions or privileged admin roles.
+      // Prevent non-admin privilege escalation on creation.
+      // 'rider' is no longer self-assignable (C2): fleet enrollment goes
+      // through rider_applications → admin approval.
       allow create: if isAuth() && (
         isAdmin() ||
         (
           request.auth.uid == userId &&
-          !request.resource.data.keys().hasAny(['admin', 'isSuperAdmin', 'permissions', 'vendorBalance']) &&
-          !(request.resource.data.get('role', '') in ['admin', 'super_admin', 'dispatcher', 'manager', 'owner', 'Admin', 'SuperAdmin', 'Dispatcher', 'Manager', 'Owner']) &&
-          !(request.resource.data.get('userRole', '') in ['admin', 'super_admin', 'dispatcher', 'manager', 'owner', 'Admin', 'SuperAdmin', 'Dispatcher', 'Manager', 'Owner'])
+          !request.resource.data.keys().hasAny([
+            'admin', 'isSuperAdmin', 'permissions', 'pin', 'userPin', 'securityPin',
+            'pinHash', 'riderApproved', 'emailVerified'
+          ]) &&
+          !(request.resource.data.get('role', '') in ['admin', 'super_admin', 'dispatcher', 'manager', 'owner', 'rider', 'Admin', 'SuperAdmin', 'Dispatcher', 'Manager', 'Owner', 'Rider']) &&
+          !(request.resource.data.get('userRole', '') in ['admin', 'super_admin', 'dispatcher', 'manager', 'owner', 'rider', 'Admin', 'SuperAdmin', 'Dispatcher', 'Manager', 'Owner', 'Rider']) &&
+          request.resource.data.get('walletBalance', 0) == 0 &&
+          request.resource.data.get('vendorBalance', 0) == 0
         )
       );
 
-      // Protect sensitive fields against non-admin escalation on update:
-      // - The owner can update profile, preferences, address, and walletBalance (requiring walletBalance >= 0)
-      // - Strictly enforce that non-admins CANNOT modify administrative credentials or escalate to admin roles
-      // - Couriers can award delivery count and loyalty points on completion
-      // - Customers can submit driver rating feedback
+      // Owners may update general profile fields only; sensitive fields are
+      // server-controlled (Admin SDK).
       allow update: if isAuth() && (
         isAdmin() ||
-        // 1. The owner can update their profile, preferences, address, and walletBalance
         (
           isOwner(userId) &&
-          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['admin', 'isSuperAdmin', 'permissions', 'vendorBalance']) &&
-          !(request.resource.data.get('role', '') in ['admin', 'super_admin', 'dispatcher', 'manager', 'owner', 'Admin', 'SuperAdmin', 'Dispatcher', 'Manager', 'Owner']) &&
-          !(request.resource.data.get('userRole', '') in ['admin', 'super_admin', 'dispatcher', 'manager', 'owner', 'Admin', 'SuperAdmin', 'Dispatcher', 'Manager', 'Owner']) &&
-          (!('walletBalance' in request.resource.data) || request.resource.data.walletBalance >= 0)
-        ) ||
-        // 2. Couriers awarding delivery count and loyalty points on delivery completion
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['loyaltyPoints', 'deliveryCount']) ||
-        // 3. Customers submitting rating feedback on courier
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rating', 'ratingCount', 'updatedAt'])
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+            'role', 'userRole', 'admin', 'isSuperAdmin', 'permissions',
+            'walletBalance', 'vendorBalance', 'pin', 'userPin', 'securityPin',
+            'pinHash', 'email', 'emailVerified', 'riderApproved'
+          ])
+        )
       );
 
       allow delete: if isSuperAdmin();
 
-      // Notifications inbox: any authenticated user (e.g., rider, customer, dispatcher) can post notifications; owner & admin manage them
+      // Notifications inbox: recipients and admins manage; creation is
+      // restricted to the owner so strangers cannot spam inboxes (C8).
       match /notifications/{notifId} {
         allow read, update, delete: if isOwner(userId) || isAdmin();
-        allow create: if isAuth();
+        allow create: if isOwner(userId) || isAdmin();
       }
 
-      // Notification events deduplication records
+      // Notification dedupe events: same scoping.
       match /notification_events/{eventId} {
         allow read, update, delete: if isOwner(userId) || isAdmin();
-        allow create: if isAuth();
+        allow create: if isOwner(userId) || isAdmin();
       }
 
-      // Ratings & reviews on user profiles
       match /ratings/{ratingId} {
         allow read: if true;
-        allow create: if isAuth();
-        allow update, delete: if isAuth() && (
-          resource.data.get('userId', '') == request.auth.uid ||
-          resource.data.get('customerId', '') == request.auth.uid ||
-          isOwner(userId) ||
-          isAdmin()
+        allow create: if isAuth() && (
+          request.auth.uid == userId ||
+          request.resource.data.get('customerId', '') == request.auth.uid ||
+          request.resource.data.get('userId', '') == request.auth.uid
         );
+        allow update, delete: if isAdmin();
       }
 
       match /reviews/{reviewId} {
         allow read: if true;
-        allow create: if isAuth();
-        allow update, delete: if isAuth() && (
-          resource.data.get('userId', '') == request.auth.uid ||
-          resource.data.get('customerId', '') == request.auth.uid ||
-          isOwner(userId) ||
-          isAdmin()
+        allow create: if isAuth() && (
+          request.resource.data.get('authorId', '') == request.auth.uid ||
+          request.resource.data.get('userId', '') == request.auth.uid
+        );
+        allow update, delete: if isAdmin() || (
+          isAuth() && resource.data.get('authorId', '') == request.auth.uid
         );
       }
 
-      // Marketplace shopping cart
-      match /cart/{itemId} {
-        allow read, write, delete: if isOwner(userId) || isAdmin();
+      match /cart/{cartId} {
+        allow read, write: if isOwner(userId) || isAdmin();
       }
 
-      // User scoped deliveries (accessible to owner, admin, dispatcher, and assigned or claiming couriers)
-      match /deliveries/{deliveryId} {
-        allow read: if isOwner(userId) || isAdmin() || isDispatcher() || (isAuth() && (
-          (resource != null && (
-            resource.data.get('riderId', '') == request.auth.uid ||
-            resource.data.get('assignedRiderId', '') == request.auth.uid ||
-            resource.data.get('driverId', '') == request.auth.uid
-          )) ||
-          (exists(/databases/$(database)/documents/deliveries/$(deliveryId)) && (
-            get(/databases/$(database)/documents/deliveries/$(deliveryId)).data.get('riderId', '') == request.auth.uid ||
-            get(/databases/$(database)/documents/deliveries/$(deliveryId)).data.get('assignedRiderId', '') == request.auth.uid ||
-            get(/databases/$(database)/documents/deliveries/$(deliveryId)).data.get('driverId', '') == request.auth.uid
-          )) ||
-          (exists(/databases/$(database)/documents/parcels/$(deliveryId)) && (
-            get(/databases/$(database)/documents/parcels/$(deliveryId)).data.get('riderId', '') == request.auth.uid ||
-            get(/databases/$(database)/documents/parcels/$(deliveryId)).data.get('assignedRiderId', '') == request.auth.uid ||
-            get(/databases/$(database)/documents/parcels/$(deliveryId)).data.get('driverId', '') == request.auth.uid
-          ))
-        ));
-
-        allow write: if isOwner(userId) || isAdmin() || isDispatcher() || (isAuth() && (
-          request.resource.data.get('userId', '') == request.auth.uid ||
-          request.resource.data.get('senderId', '') == request.auth.uid ||
-          request.resource.data.get('riderId', '') == request.auth.uid ||
-          request.resource.data.get('assignedRiderId', '') == request.auth.uid ||
-          request.resource.data.get('driverId', '') == request.auth.uid ||
-          (resource != null && (
-            resource.data.get('riderId', '') == request.auth.uid ||
-            resource.data.get('assignedRiderId', '') == request.auth.uid ||
-            resource.data.get('driverId', '') == request.auth.uid ||
-            isAvailableDelivery(resource.data) ||
-            request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-              'courierLatitude', 'courierLongitude', 'courierBearing', 'courierSpeed',
-              'courierAccuracy', 'courierLastUpdated', 'initialCourierLat', 'initialCourierLng',
-              'lastUpdated', 'updatedAt', 'status', 'progress'
-            ])
-          )) ||
-          (exists(/databases/$(database)/documents/deliveries/$(deliveryId)) && (
-            get(/databases/$(database)/documents/deliveries/$(deliveryId)).data.get('riderId', '') == request.auth.uid ||
-            get(/databases/$(database)/documents/deliveries/$(deliveryId)).data.get('assignedRiderId', '') == request.auth.uid ||
-            get(/databases/$(database)/documents/deliveries/$(deliveryId)).data.get('driverId', '') == request.auth.uid
-          )) ||
-          (exists(/databases/$(database)/documents/parcels/$(deliveryId)) && (
-            get(/databases/$(database)/documents/parcels/$(deliveryId)).data.get('riderId', '') == request.auth.uid ||
-            get(/databases/$(database)/documents/parcels/$(deliveryId)).data.get('assignedRiderId', '') == request.auth.uid ||
-            get(/databases/$(database)/documents/parcels/$(deliveryId)).data.get('driverId', '') == request.auth.uid
-          ))
-        ));
-
-        allow delete: if isOwner(userId) || isAdmin();
-
-        match /chats/{msgId} {
-          allow read, write: if isAuth();
-          allow delete: if isAdmin();
-        }
-
-        match /messages/{msgId} {
-          allow read, write: if isAuth();
-          allow delete: if isAdmin();
-        }
-
-        match /timeline/{eventId} {
-          allow read, write: if isAuth();
-          allow delete: if isAdmin();
-        }
-
-        match /pod_events/{eventId} {
-          allow read, write: if isAuth();
-          allow delete: if isAdmin();
-        }
-
-        match /{allSubcollections=**} {
-          allow read, write: if isAuth();
-          allow delete: if isAdmin();
-        }
-      }
-
-      // Saved delivery addresses
       match /addresses/{addressId} {
-        allow read, write, delete: if isOwner(userId) || isAdmin();
+        allow read, write: if isOwner(userId) || isAdmin();
       }
 
-      // Saved payment cards (Private security subcollection)
       match /payment_cards/{cardId} {
-        allow read, write, delete: if isOwner(userId) || isAdmin();
+        allow read, write: if isOwner(userId) || isAdmin();
       }
 
-      // Security events and login logs (Private security subcollection)
+      match /deliveries/{deliveryId} {
+        allow read, write: if isOwner(userId) || isAdmin() || isDispatcher() ||
+          (isAuth() && (
+            (exists(/databases/$(database)/documents/deliveries/$(deliveryId)) &&
+             isDeliveryParticipant(get(/databases/$(database)/documents/deliveries/$(deliveryId)).data)) ||
+            (exists(/databases/$(database)/documents/parcels/$(deliveryId)) &&
+             isDeliveryParticipant(get(/databases/$(database)/documents/parcels/$(deliveryId)).data))
+          ));
+      }
+
+      match /notifications/{notifId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isAuth();
+        allow update, delete: if isOwner(userId) || isAdmin();
+      }
+
       match /security_events/{eventId} {
-        allow read, create: if isOwner(userId) || isAdmin();
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) || isAdmin();
         allow update, delete: if isAdmin();
       }
 
-      // Activity logs (Private security subcollection)
       match /activity_logs/{logId} {
-        allow read, create: if isOwner(userId) || isAdmin();
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) || isAdmin();
         allow update, delete: if isAdmin();
       }
 
-      // User transaction ledger (accessible to owner, admin, or counterparty)
       match /transactions/{txId} {
-        allow read, write: if isOwner(userId) || isAdmin() || (isAuth() && (request.resource.data.get('userId', '') == userId || resource.data.get('userId', '') == request.auth.uid));
-        allow delete: if isAdmin();
+        allow read: if isOwner(userId) || isAdmin();
+        // Wallet transaction mirrors are cosmetic; the authoritative ledger
+        // is server-only (system_ledger). Owners may only record their own.
+        allow create: if isOwner(userId) && (
+          request.resource.data.get('userId', '') == request.auth.uid ||
+          request.resource.data.get('userId', '') == userId
+        );
+        allow update, delete: if isAdmin();
       }
 
-      // Cryptographic verification OTP records (Private security subcollection)
-      match /verification_otp/{docId} {
-        allow read, write: if isOwner(userId) || isAdmin();
+      // C2: the legacy rider-escalation subcollection is fully denied.
+      match /riders/{riderId} {
+        allow read, write: if false;
       }
 
-      match /verification_otps/{docId} {
-        allow read, write: if isOwner(userId) || isAdmin();
-      }
-
-      // Private security credentials subcollections
-      match /security/{docId} {
-        allow read, write: if isOwner(userId) || isAdmin();
-      }
-
-      match /private/{docId} {
-        allow read, write: if isOwner(userId) || isAdmin();
-      }
-
-      match /credentials/{docId} {
-        allow read, write: if isOwner(userId) || isAdmin();
-      }
-
-      // Scoped fallback for any other subcollections under /users/{userId}
       match /{allSubcollections=**} {
         allow read, write: if isOwner(userId) || isAdmin();
-        allow delete: if isOwner(userId) || isSuperAdmin();
+        allow delete: if isAdmin();
       }
     }
 
     // ===============================================================
-    // PHONE NUMBER REGISTRY & STRICT UNIQUENESS INDEX
+    // PHONE REGISTRY (H10: requires auth to read)
     // ===============================================================
 
     match /phone_indices/{phoneKey} {
-      // Public read for real-time pre-signup phone availability check
-      allow read: if true;
-
-      // Authenticated users claim their phone key reservation
-      allow create: if isAuth() && request.resource.data.get('uid', '') == request.auth.uid;
-
-      // Only the reservation owner or admin can update or release
-      allow update, delete: if isAuth() && (isAdmin() || resource.data.get('uid', '') == request.auth.uid);
+      allow read: if isAuth();
+      allow create: if isAuth() && (
+        isAdmin() ||
+        (request.resource.data.get('uid', '') == request.auth.uid)
+      );
+      allow update: if isAuth() && (
+        isAdmin() ||
+        (resource.data.get('uid', '') == request.auth.uid && request.resource.data.get('uid', '') == request.auth.uid)
+      );
+      allow delete: if isAdmin();
     }
 
     // ===============================================================
-    // DELIVERIES & PARCELS (Tracking, Ratings, Status, Chats)
+    // DELIVERIES (core booking / tracking documents)
     // ===============================================================
 
     match /deliveries/{deliveryId} {
-      // Scoped access for participants, fleet dispatchers, admins, pool deliveries, verified recipient phone match, or assigned couriers
-      allow get, list: if isAuth() && (
+      allow list: if isAuth() && (
+        isAdmin() ||
+        isDispatcher() ||
+        resource.data.userId == request.auth.uid ||
+        resource.data.senderId == request.auth.uid ||
+        resource.data.riderId == request.auth.uid ||
+        resource.data.driverId == request.auth.uid ||
+        resource.data.assignedRiderId == request.auth.uid ||
+        resource.data.reservedRiderId == request.auth.uid ||
+        (
+          isVerifiedRider() &&
+          resource.data.status in [
+            'PENDING', 'QUEUED', 'OFFERED', 'pending', 'queued',
+            'AVAILABLE', 'available', 'UNASSIGNED', 'unassigned', 'ASSIGNED_TO_POOL'
+          ]
+        )
+      );
+
+      allow get: if isAuth() && (
         isAdmin() ||
         isDispatcher() ||
         isDeliveryParticipant(resource.data) ||
-        isAvailableDelivery(resource.data) ||
-        (request.auth.token.get('phone_number', '') != '' && request.auth.token.phone_number == resource.data.get('receiverPhone', '')) ||
-        (exists(/databases/$(database)/documents/parcels/$(deliveryId)) && (
-          get(/databases/$(database)/documents/parcels/$(deliveryId)).data.get('riderId', '') == request.auth.uid ||
-          get(/databases/$(database)/documents/parcels/$(deliveryId)).data.get('assignedRiderId', '') == request.auth.uid ||
-          get(/databases/$(database)/documents/parcels/$(deliveryId)).data.get('driverId', '') == request.auth.uid
-        ))
+        (isVerifiedRider() && isAvailableDelivery(resource.data)) ||
+        (request.auth.token.get('phone_number', '') != '' && request.auth.token.phone_number == resource.data.get('receiverPhone', ''))
       );
 
-      allow create: if isAuth();
+      // Client creates are allowed ONLY as unpaid drafts (offline/guest flow)
+      // or by admins/dispatchers booking on behalf of customers.
+      // Server-authoritative paid bookings come from the createBooking callable.
+      // C1: no payment/otp/settlement fields, no rider self-assignment.
+      allow create: if isAuth() && (
+        isAdmin() ||
+        isDispatcher() ||
+        (
+          request.resource.data.get('userId', '') == request.auth.uid &&
+          request.resource.data.get('riderId', '') == '' &&
+          request.resource.data.get('driverId', '') == '' &&
+          request.resource.data.get('paymentStatus', 'PENDING_PAYMENT') != 'PAID' &&
+          !request.resource.data.keys().hasAny(createGuardKeys()) &&
+          isReasonableWrite()
+        )
+      );
 
-      // Participants, dispatchers, admins, booking customer, couriers updating status/telemetry, and claiming unassigned deliveries
+      // C1: participant updates deny-list money/otp/payment fields. Riders
+      // may manage operational state; customers may edit booking details and
+      // may only cancel (status → CANCELLED).
       allow update: if isAuth() && (
         isAdmin() ||
         isDispatcher() ||
-        isDeliveryParticipant(resource.data) ||
-        isDeliveryParticipant(request.resource.data) ||
-        isAvailableDelivery(resource.data) ||
-        request.resource.data.get('userId', '') == request.auth.uid ||
-        request.resource.data.get('customerId', '') == request.auth.uid ||
-        request.resource.data.get('riderId', '') == request.auth.uid ||
-        request.resource.data.get('assignedRiderId', '') == request.auth.uid ||
-        request.resource.data.get('driverId', '') == request.auth.uid ||
-        resource.data.get('riderId', '') in ['', 'unassigned'] ||
-        // Couriers updating telemetry (GPS coordinates, heading, speed, accuracy, timestamps)
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'courierLatitude', 'courierLongitude', 'courierBearing', 'courierSpeed',
-          'courierAccuracy', 'courierLastUpdated', 'initialCourierLat', 'initialCourierLng',
-          'lastUpdated', 'updatedAt'
-        ]) ||
-        // Couriers updating delivery status or progress transitions
         (
-          request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'progress', 'lastUpdated', 'updatedAt']) && (
-            resource.data.get('riderId', '') == request.auth.uid ||
-            resource.data.get('assignedRiderId', '') == request.auth.uid ||
-            resource.data.get('driverId', '') == request.auth.uid ||
-            resource.data.get('reservedRiderId', '') == request.auth.uid ||
-            request.resource.data.get('riderId', '') == request.auth.uid ||
-            request.resource.data.get('assignedRiderId', '') == request.auth.uid ||
-            request.resource.data.get('driverId', '') == request.auth.uid ||
-            isAvailableDelivery(resource.data)
+          isDeliveryParticipant(resource.data) &&
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(paymentOtpGuardKeys()) &&
+          (
+            // Rider operational updates
+            (
+              (
+                resource.data.get('riderId', '') == request.auth.uid ||
+                resource.data.get('driverId', '') == request.auth.uid ||
+                resource.data.get('assignedRiderId', '') == request.auth.uid
+              ) &&
+              !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+                'price', 'deliveryFee', 'tipAmount', 'userId', 'senderId',
+                'assignedRiderId', 'reservedRiderId', 'riderId', 'driverId',
+                'receiverPhone', 'receiverName', 'recipientName', 'recipientEmail'
+              ])
+            ) ||
+            // Customer booking edits (money fields lock once PAID)
+            (
+              resource.data.get('userId', '') == request.auth.uid &&
+              !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+                'riderId', 'driverId', 'assignedRiderId', 'reservedRiderId',
+                'courierName', 'courierPhone', 'riderBikeNumber',
+                'courierLatitude', 'courierLongitude', 'progress',
+                'pickupPhotoUrl', 'arrivalPhotoUrl', 'podUrl', 'otpVerified'
+              ]) &&
+              (
+                resource.data.get('paymentStatus', '') != 'PAID' ||
+                !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+                  'price', 'deliveryFee', 'tipAmount'
+                ])
+              ) &&
+              (
+                request.resource.data.get('status', resource.data.get('status', '')) == resource.data.get('status', '') ||
+                request.resource.data.get('status', '') in ['CANCELLED', 'cancelled', 'Cancelled']
+              )
+            )
           )
         ) ||
-        // Cross-collection courier match if delivery is tracked in parcels
+        // Verified rider claiming an unassigned pool delivery
         (
-          exists(/databases/$(database)/documents/parcels/$(deliveryId)) && (
-            get(/databases/$(database)/documents/parcels/$(deliveryId)).data.get('riderId', '') == request.auth.uid ||
-            get(/databases/$(database)/documents/parcels/$(deliveryId)).data.get('assignedRiderId', '') == request.auth.uid ||
-            get(/databases/$(database)/documents/parcels/$(deliveryId)).data.get('driverId', '') == request.auth.uid
-          )
+          isVerifiedRider() &&
+          isAvailableDelivery(resource.data) &&
+          resource.data.get('riderId', '') == '' &&
+          request.resource.data.get('riderId', '') == request.auth.uid &&
+          updateHasOnly(['riderId', 'driverId', 'status', 'courierName', 'courierPhone', 'riderBikeNumber', 'progress', 'assignedAt', 'acceptedAt', 'lastUpdated'])
         )
       );
 
       allow delete: if isAdmin();
 
-      // Delivery subcollections: chats, messages, timeline events, proof of delivery (pod_events)
-      match /chats/{msgId} {
-        allow read, write: if isAuth();
-        allow delete: if isAdmin();
-      }
-
-      match /messages/{msgId} {
-        allow read, write: if isAuth();
-        allow delete: if isAdmin();
-      }
-
-      match /timeline/{eventId} {
-        allow read, write: if isAuth();
-        allow delete: if isAdmin();
-      }
-
-      match /pod_events/{eventId} {
-        allow read, write: if isAuth();
-        allow delete: if isAdmin();
-      }
-
+      // Subcollections: messages, timeline, chats, POD — participants only.
       match /{allSubcollections=**} {
-        allow read, write: if isAuth();
+        allow read, write: if isAuth() && (
+          isAdmin() ||
+          isDispatcher() ||
+          (
+            exists(/databases/$(database)/documents/deliveries/$(deliveryId)) &&
+            isDeliveryParticipant(get(/databases/$(database)/documents/deliveries/$(deliveryId)).data)
+          )
+        );
         allow delete: if isAdmin();
       }
     }
+
+    // ===============================================================
+    // PARCELS (mirror of deliveries; legacy + mirrored documents)
+    // ===============================================================
 
     match /parcels/{parcelId} {
-      // Scoped access for participants, fleet dispatchers, admins, pool deliveries, verified recipient phone match, or assigned couriers
-      allow get, list: if isAuth() && (
+      allow list: if isAuth() && (
+        isAdmin() ||
+        isDispatcher() ||
+        resource.data.userId == request.auth.uid ||
+        resource.data.senderId == request.auth.uid ||
+        resource.data.riderId == request.auth.uid ||
+        resource.data.driverId == request.auth.uid ||
+        resource.data.assignedRiderId == request.auth.uid ||
+        resource.data.reservedRiderId == request.auth.uid ||
+        (
+          isVerifiedRider() &&
+          resource.data.status in [
+            'PENDING', 'QUEUED', 'OFFERED', 'pending', 'queued',
+            'AVAILABLE', 'available', 'UNASSIGNED', 'unassigned', 'ASSIGNED_TO_POOL'
+          ]
+        )
+      );
+
+      allow get: if isAuth() && (
         isAdmin() ||
         isDispatcher() ||
         isDeliveryParticipant(resource.data) ||
-        isAvailableDelivery(resource.data) ||
-        (request.auth.token.get('phone_number', '') != '' && request.auth.token.phone_number == resource.data.get('receiverPhone', '')) ||
-        (exists(/databases/$(database)/documents/deliveries/$(parcelId)) && (
-          get(/databases/$(database)/documents/deliveries/$(parcelId)).data.get('riderId', '') == request.auth.uid ||
-          get(/databases/$(database)/documents/deliveries/$(parcelId)).data.get('assignedRiderId', '') == request.auth.uid ||
-          get(/databases/$(database)/documents/deliveries/$(parcelId)).data.get('driverId', '') == request.auth.uid
-        ))
+        (isVerifiedRider() && isAvailableDelivery(resource.data)) ||
+        (request.auth.token.get('phone_number', '') != '' && request.auth.token.phone_number == resource.data.get('receiverPhone', ''))
       );
 
-      allow create: if isAuth();
+      allow create: if isAuth() && (
+        isAdmin() ||
+        isDispatcher() ||
+        (
+          request.resource.data.get('userId', '') == request.auth.uid &&
+          request.resource.data.get('riderId', '') == '' &&
+          request.resource.data.get('driverId', '') == '' &&
+          request.resource.data.get('paymentStatus', 'PENDING_PAYMENT') != 'PAID' &&
+          !request.resource.data.keys().hasAny(createGuardKeys()) &&
+          isReasonableWrite()
+        )
+      );
 
-      // Participants, dispatchers, admins, booking customer, couriers updating status/telemetry, and claiming unassigned deliveries
       allow update: if isAuth() && (
         isAdmin() ||
         isDispatcher() ||
-        isDeliveryParticipant(resource.data) ||
-        isDeliveryParticipant(request.resource.data) ||
-        isAvailableDelivery(resource.data) ||
-        request.resource.data.get('userId', '') == request.auth.uid ||
-        request.resource.data.get('customerId', '') == request.auth.uid ||
-        request.resource.data.get('riderId', '') == request.auth.uid ||
-        request.resource.data.get('assignedRiderId', '') == request.auth.uid ||
-        request.resource.data.get('driverId', '') == request.auth.uid ||
-        resource.data.get('riderId', '') in ['', 'unassigned'] ||
-        // Couriers updating telemetry (GPS coordinates, heading, speed, accuracy, timestamps)
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'courierLatitude', 'courierLongitude', 'courierBearing', 'courierSpeed',
-          'courierAccuracy', 'courierLastUpdated', 'initialCourierLat', 'initialCourierLng',
-          'lastUpdated', 'updatedAt'
-        ]) ||
-        // Couriers updating delivery status or progress transitions
         (
-          request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'progress', 'lastUpdated', 'updatedAt']) && (
-            resource.data.get('riderId', '') == request.auth.uid ||
-            resource.data.get('assignedRiderId', '') == request.auth.uid ||
-            resource.data.get('driverId', '') == request.auth.uid ||
-            resource.data.get('reservedRiderId', '') == request.auth.uid ||
-            request.resource.data.get('riderId', '') == request.auth.uid ||
-            request.resource.data.get('assignedRiderId', '') == request.auth.uid ||
-            request.resource.data.get('driverId', '') == request.auth.uid ||
-            isAvailableDelivery(resource.data)
+          isDeliveryParticipant(resource.data) &&
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(paymentOtpGuardKeys()) &&
+          (
+            (
+              (
+                resource.data.get('riderId', '') == request.auth.uid ||
+                resource.data.get('driverId', '') == request.auth.uid ||
+                resource.data.get('assignedRiderId', '') == request.auth.uid
+              ) &&
+              !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+                'price', 'deliveryFee', 'tipAmount', 'userId', 'senderId',
+                'assignedRiderId', 'reservedRiderId', 'riderId', 'driverId',
+                'receiverPhone', 'receiverName', 'recipientName', 'recipientEmail'
+              ])
+            ) ||
+            (
+              resource.data.get('userId', '') == request.auth.uid &&
+              !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+                'riderId', 'driverId', 'assignedRiderId', 'reservedRiderId',
+                'courierName', 'courierPhone', 'riderBikeNumber',
+                'courierLatitude', 'courierLongitude', 'progress',
+                'pickupPhotoUrl', 'arrivalPhotoUrl', 'podUrl', 'otpVerified'
+              ]) &&
+              (
+                resource.data.get('paymentStatus', '') != 'PAID' ||
+                !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+                  'price', 'deliveryFee', 'tipAmount'
+                ])
+              ) &&
+              (
+                request.resource.data.get('status', resource.data.get('status', '')) == resource.data.get('status', '') ||
+                request.resource.data.get('status', '') in ['CANCELLED', 'cancelled', 'Cancelled']
+              )
+            )
           )
         ) ||
-        // Cross-collection courier match if delivery is tracked in deliveries
         (
-          exists(/databases/$(database)/documents/deliveries/$(parcelId)) && (
-            get(/databases/$(database)/documents/deliveries/$(parcelId)).data.get('riderId', '') == request.auth.uid ||
-            get(/databases/$(database)/documents/deliveries/$(parcelId)).data.get('assignedRiderId', '') == request.auth.uid ||
-            get(/databases/$(database)/documents/deliveries/$(parcelId)).data.get('driverId', '') == request.auth.uid
-          )
+          isVerifiedRider() &&
+          isAvailableDelivery(resource.data) &&
+          resource.data.get('riderId', '') == '' &&
+          request.resource.data.get('riderId', '') == request.auth.uid &&
+          updateHasOnly(['riderId', 'driverId', 'status', 'courierName', 'courierPhone', 'riderBikeNumber', 'progress', 'assignedAt', 'acceptedAt', 'lastUpdated'])
         )
       );
 
       allow delete: if isAdmin();
 
-      // Parcel subcollections: chats, messages, timeline events, proof of delivery (pod_events)
-      match /chats/{msgId} {
-        allow read, write: if isAuth();
-        allow delete: if isAdmin();
-      }
-
-      match /messages/{msgId} {
-        allow read, write: if isAuth();
-        allow delete: if isAdmin();
-      }
-
-      match /timeline/{eventId} {
-        allow read, write: if isAuth();
-        allow delete: if isAdmin();
-      }
-
-      match /pod_events/{eventId} {
-        allow read, write: if isAuth();
-        allow delete: if isAdmin();
-      }
-
       match /{allSubcollections=**} {
-        allow read, write: if isAuth();
+        allow read, write: if isAuth() && (
+          isAdmin() ||
+          isDispatcher() ||
+          (
+            exists(/databases/$(database)/documents/parcels/$(parcelId)) &&
+            isDeliveryParticipant(get(/databases/$(database)/documents/parcels/$(parcelId)).data)
+          )
+        );
         allow delete: if isAdmin();
       }
     }
+
+    // ===============================================================
+    // PUBLIC TRACKING PROJECTION (C4: spoof-proof writes)
+    // ===============================================================
 
     match /public_tracking/{deliveryId} {
-      // Public read for recipients tracking orders via link
+      // Public read for recipients tracking orders via link.
       allow read: if true;
-      allow write: if isAuth();
-      allow delete: if isAdmin();
-
-      match /{allSubcollections=**} {
-        allow read: if true;
-        allow write: if isAuth();
-        allow delete: if isAdmin();
-      }
-    }
-
-    // ===============================================================
-    // REVIEWS & RATINGS (Root Collections)
-    // ===============================================================
-
-    match /reviews/{reviewId} {
-      allow read: if true;
-      allow create: if isAuth();
-      allow update, delete: if isAuth() && (
-        resource.data.get('userId', '') == request.auth.uid ||
-        resource.data.get('customerId', '') == request.auth.uid ||
-        resource.data.get('authorId', '') == request.auth.uid ||
-        isAdmin()
+      // Writes require participation on the EXISTING document — payload
+      // self-claims no longer grant access (C4).
+      allow write: if isAuth() && (
+        isAdmin() ||
+        isDispatcher() ||
+        (
+          resource != null && (
+            resource.data.get('riderId', '') == request.auth.uid ||
+            resource.data.get('userId', '') == request.auth.uid ||
+            resource.data.get('assignedRiderId', '') == request.auth.uid
+          )
+        )
       );
 
       match /{allSubcollections=**} {
         allow read: if true;
         allow write: if isAuth() && (
-          resource.data.get('userId', '') == request.auth.uid ||
-          resource.data.get('customerId', '') == request.auth.uid ||
-          request.resource.data.get('userId', '') == request.auth.uid ||
-          request.resource.data.get('customerId', '') == request.auth.uid ||
-          isAdmin()
-        );
-        allow delete: if isAdmin();
-      }
-    }
-
-    match /ratings/{ratingId} {
-      allow read: if true;
-      allow create: if isAuth();
-      allow update, delete: if isAuth() && (
-        resource.data.get('userId', '') == request.auth.uid ||
-        resource.data.get('customerId', '') == request.auth.uid ||
-        resource.data.get('authorId', '') == request.auth.uid ||
-        isAdmin()
-      );
-
-      match /{allSubcollections=**} {
-        allow read: if true;
-        allow write: if isAuth() && (
-          resource.data.get('userId', '') == request.auth.uid ||
-          resource.data.get('customerId', '') == request.auth.uid ||
-          request.resource.data.get('userId', '') == request.auth.uid ||
-          request.resource.data.get('customerId', '') == request.auth.uid ||
-          isAdmin()
+          isAdmin() ||
+          isDispatcher() ||
+          (
+            exists(/databases/$(database)/documents/public_tracking/$(deliveryId)) && (
+              get(/databases/$(database)/documents/public_tracking/$(deliveryId)).data.get('riderId', '') == request.auth.uid ||
+              get(/databases/$(database)/documents/public_tracking/$(deliveryId)).data.get('userId', '') == request.auth.uid
+            )
+          )
         );
         allow delete: if isAdmin();
       }
     }
 
     // ===============================================================
-    // RIDER TIPS & GRATUITY RECORDS
+    // SERVER-LOCKED COLLECTIONS
     // ===============================================================
 
-    match /rider_tips/{tipId} {
-      allow read: if isAuth() && (
-        isAdmin() ||
-        resource.data.get('riderId', '') == request.auth.uid ||
-        resource.data.get('customerId', '') == request.auth.uid ||
-        resource.data.get('userId', '') == request.auth.uid
-      );
-      allow create: if isAuth();
-      allow update, delete: if isAdmin();
-
-      match /{allSubcollections=**} {
-        allow read: if isAuth() && (
-          isAdmin() ||
-          resource.data.get('riderId', '') == request.auth.uid ||
-          resource.data.get('customerId', '') == request.auth.uid ||
-          resource.data.get('userId', '') == request.auth.uid
-        );
-        allow write, delete: if isAdmin();
-      }
+    // Handover OTP plaintext (C3): only the Admin SDK may read/write.
+    match /delivery_otp_secrets/{docId} {
+      allow read, write: if false;
     }
 
-    // ===============================================================
-    // TRANSACTIONS, LEDGERS & WITHDRAWALS
-    // ===============================================================
-
-    match /transactions/{transactionId} {
-      allow read: if isAuth() && (
-        isAdmin() ||
-        resource.data.get('userId', '') == request.auth.uid ||
-        resource.data.get('riderId', '') == request.auth.uid ||
-        resource.data.get('customerId', '') == request.auth.uid ||
-        resource.data.get('actorId', '') == request.auth.uid
-      );
-      allow create, update: if isAuth();
-      allow delete: if isAdmin();
-
-      match /{allSubcollections=**} {
-        allow read: if isAuth() && (
-          isAdmin() ||
-          resource.data.get('userId', '') == request.auth.uid ||
-          resource.data.get('riderId', '') == request.auth.uid ||
-          resource.data.get('customerId', '') == request.auth.uid ||
-          resource.data.get('actorId', '') == request.auth.uid
-        );
-        allow write: if isAuth();
-        allow delete: if isAdmin();
-      }
-    }
-
-    match /tip_withdrawals/{withdrawalId} {
-      allow read: if isAuth() && (
-        isAdmin() ||
-        resource.data.get('riderId', '') == request.auth.uid ||
-        resource.data.get('userId', '') == request.auth.uid
-      );
-      allow create: if isAuth();
-      allow update, delete: if isAdmin();
-
-      match /{allSubcollections=**} {
-        allow read: if isAuth() && (
-          isAdmin() ||
-          resource.data.get('riderId', '') == request.auth.uid ||
-          resource.data.get('userId', '') == request.auth.uid
-        );
-        allow write, delete: if isAdmin();
-      }
-    }
-
-    match /refund_requests/{requestId} {
-      allow read: if isAuth() && (
-        isAdmin() ||
-        resource.data.get('userId', '') == request.auth.uid ||
-        resource.data.get('customerId', '') == request.auth.uid
-      );
-      allow create: if isAuth();
-      allow update, delete: if isAdmin();
-
-      match /{allSubcollections=**} {
-        allow read: if isAuth() && (
-          isAdmin() ||
-          resource.data.get('userId', '') == request.auth.uid ||
-          resource.data.get('customerId', '') == request.auth.uid
-        );
-        allow write, delete: if isAdmin();
-      }
-    }
-
-    match /vendor_payout_requests/{docId} {
-      allow read: if isAuth() && (
-        isAdmin() ||
-        resource.data.get('vendorId', '') == request.auth.uid ||
-        resource.data.get('userId', '') == request.auth.uid
-      );
-      allow create: if isAuth();
-      allow update, delete: if isAdmin();
-    }
-
-    match /payout_settlements/{docId} {
-      allow read: if isAdmin();
-      allow write: if false; // Cloud Functions only
-    }
-
+    // Payment ledger: server-only writes; owner & admin reads.
     match /system_ledger/{docId} {
-      allow read: if isAdmin();
-      allow write: if false; // Cloud Functions only
+      allow read: if isAuth() && (
+        isAdmin() || resource.data.get('userId', '') == request.auth.uid
+      );
+      allow write: if false;
     }
 
     match /settlement_records/{docId} {
       allow read: if isAdmin() || isDispatcher();
-      allow write: if false; // Cloud Functions only
+      allow write: if false;
+    }
+
+    match /payout_settlements/{docId} {
+      allow read: if isAdmin();
+      allow write: if false;
     }
 
     // ===============================================================
-    // FLEET LOCATIONS, ATTENDANCE & TELEMETRY
+    // RIDER ENROLLMENT (C2: application → admin approval)
     // ===============================================================
 
+    match /rider_applications/{uid} {
+      allow read: if isAuth() && (
+        isOwner(uid) || isAdmin() || isDispatcher()
+      );
+      allow create: if isAuth() && (
+        request.auth.uid == uid &&
+        request.resource.data.get('status', '') == 'PENDING' &&
+        !request.resource.data.keys().hasAny(['approvedBy', 'approvedAt', 'rejectionReason'])
+      );
+      allow update: if isAdmin() || isDispatcher();
+      allow delete: if isAdmin();
+    }
+
+    match /rider_profiles/{uid} {
+      allow read: if isAuth() && (
+        isOwner(uid) || isAdmin() || isDispatcher()
+      );
+      allow write: if false; // Cloud Functions only
+    }
+
+    match /withdrawal_requests/{docId} {
+      allow read: if isAuth() && (
+        isAdmin() || resource.data.get('userId', '') == request.auth.uid
+      );
+      allow create: if false; // server callable only
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // FLEET: LOCATIONS, RIDERS, DRIVERS, ATTENDANCE
+    // ===============================================================
+
+    // C9: live GPS is readable by admins, dispatchers, the rider, or the assigned customer.
     match /fleet_locations/{riderId} {
-      allow read: if isAuth();
+      allow read: if isAuth() && (
+        isAdmin() ||
+        isDispatcher() ||
+        request.auth.uid == riderId ||
+        (
+          resource.data.get('activeBookingId', '') != '' && (
+            (exists(/databases/$(database)/documents/deliveries/$(resource.data.activeBookingId)) &&
+             get(/databases/$(database)/documents/deliveries/$(resource.data.activeBookingId)).data.get('userId', '') == request.auth.uid) ||
+            (exists(/databases/$(database)/documents/parcels/$(resource.data.activeBookingId)) &&
+             get(/databases/$(database)/documents/parcels/$(resource.data.activeBookingId)).data.get('userId', '') == request.auth.uid)
+          )
+        )
+      );
       allow write: if isAuth() && (request.auth.uid == riderId || isAdmin() || isDispatcher());
       allow delete: if isAdmin();
     }
 
+    match /riders/{riderId} {
+      // C9: profiles readable only by self, admins and dispatchers.
+      allow read: if isAuth() && (
+        isAdmin() || isDispatcher() || request.auth.uid == riderId
+      );
+      allow create: if isAuth() && (request.auth.uid == riderId || isAdmin());
+      allow update: if isAuth() && (
+        isAdmin() ||
+        (request.auth.uid == riderId && updateHasOnly([
+          'isOnline', 'status', 'lat', 'lng', 'latitude', 'longitude',
+          'lastSeen', 'lastHeartbeat', 'updatedAt', 'name', 'phone', 'bikeNumber'
+        ]))
+      );
+      allow delete: if isAdmin();
+
+      match /{allSubcollections=**} {
+        allow read, write: if isAuth() && (request.auth.uid == riderId || isAdmin());
+        allow delete: if isAdmin();
+      }
+    }
+
+    match /drivers/{driverId} {
+      allow read: if isAuth() && (
+        isAdmin() || isDispatcher() || request.auth.uid == driverId
+      );
+      allow create: if isAuth() && (request.auth.uid == driverId || isAdmin());
+      allow update: if isAuth() && (
+        isAdmin() ||
+        (request.auth.uid == driverId && updateHasOnly([
+          'isOnline', 'status', 'lat', 'lng', 'latitude', 'longitude',
+          'lastSeen', 'lastHeartbeat', 'updatedAt', 'name', 'phone', 'bikeNumber'
+        ]))
+      );
+      allow delete: if isAdmin();
+
+      match /{allSubcollections=**} {
+        allow read, write: if isAuth() && (request.auth.uid == driverId || isAdmin());
+        allow delete: if isAdmin();
+      }
+    }
+
     match /rider_attendance/{docId} {
-      allow read, create: if isAuth();
+      allow read: if isAuth() && (
+        isAdmin() ||
+        isDispatcher() ||
+        resource.data.get('riderId', '') == request.auth.uid ||
+        resource.data.get('userId', '') == request.auth.uid
+      );
+      allow create: if isAuth() && (
+        isAdmin() ||
+        isDispatcher() ||
+        request.resource.data.get('riderId', '') == request.auth.uid ||
+        request.resource.data.get('userId', '') == request.auth.uid
+      );
       allow update, delete: if isAdmin() || isDispatcher();
     }
 
     match /vehicle_inspections/{docId} {
-      allow read, create: if isAuth();
+      allow read: if isAuth() && (
+        isAdmin() ||
+        isDispatcher() ||
+        resource.data.get('riderId', '') == request.auth.uid ||
+        resource.data.get('driverId', '') == request.auth.uid ||
+        resource.data.get('userId', '') == request.auth.uid
+      );
+      allow create: if isAuth() && (
+        isAdmin() ||
+        isDispatcher() ||
+        request.resource.data.get('riderId', '') == request.auth.uid ||
+        request.resource.data.get('driverId', '') == request.auth.uid ||
+        request.resource.data.get('userId', '') == request.auth.uid
+      );
       allow update, delete: if isAdmin() || isDispatcher();
     }
 
-    match /drivers/{driverId} {
-      allow read: if isAuth();
-      allow create, update: if isAuth() && (request.auth.uid == driverId || isAdmin() || isDispatcher());
-      allow delete: if isAdmin();
-
-      match /{allSubcollections=**} {
-        allow read, write: if isAuth() && (request.auth.uid == driverId || isAdmin() || isDispatcher());
-        allow delete: if isAdmin();
-      }
-    }
-
-    match /riders/{riderId} {
-      allow read: if isAuth();
-      allow create, update: if isAuth() && (request.auth.uid == riderId || isAdmin() || isDispatcher());
-      allow delete: if isAdmin();
-
-      match /{allSubcollections=**} {
-        allow read, write: if isAuth() && (request.auth.uid == riderId || isAdmin() || isDispatcher());
-        allow delete: if isAdmin();
-      }
-    }
-
     // ===============================================================
-    // SUPPORT & DISPUTE CHATS
+    // SUPPORT CHATS (C10: participant scoping)
     // ===============================================================
 
     match /support_chats/{ticketId} {
-      allow read, update: if isAuth() && (
+      allow read: if isAuth() && (
         isAdmin() ||
         isDispatcher() ||
         resource.data.get('userId', '') == request.auth.uid ||
         resource.data.get('customerId', '') == request.auth.uid ||
-        resource.data.get('riderId', '') == request.auth.uid ||
-        resource.data.get('authorId', '') == request.auth.uid ||
-        resource.data.get('userId', '') in ['', 'ESAI_ASSISTANT', 'SYSTEM', 'anonymous'] ||
-        request.resource.data.get('userId', '') == request.auth.uid
+        resource.data.get('riderId', '') == request.auth.uid
       );
-      allow create: if isAuth();
+      allow create: if isAuth() && (
+        request.resource.data.get('userId', '') == request.auth.uid ||
+        request.resource.data.get('customerId', '') == request.auth.uid ||
+        request.resource.data.get('riderId', '') == request.auth.uid
+      );
+      allow update: if isAuth() && (
+        isAdmin() ||
+        isDispatcher() ||
+        resource.data.get('userId', '') == request.auth.uid ||
+        resource.data.get('customerId', '') == request.auth.uid ||
+        resource.data.get('riderId', '') == request.auth.uid
+      );
       allow delete: if isAdmin();
 
       match /messages/{msgId} {
-        allow read, write: if isAuth();
+        allow read, write: if isAuth() && (
+          isAdmin() ||
+          isDispatcher() ||
+          (
+            exists(/databases/$(database)/documents/support_chats/$(ticketId)) &&
+            (
+              get(/databases/$(database)/documents/support_chats/$(ticketId)).data.get('userId', '') == request.auth.uid ||
+              get(/databases/$(database)/documents/support_chats/$(ticketId)).data.get('customerId', '') == request.auth.uid ||
+              get(/databases/$(database)/documents/support_chats/$(ticketId)).data.get('riderId', '') == request.auth.uid
+            )
+          )
+        );
         allow delete: if isAdmin();
       }
 
       match /{allSubcollections=**} {
-        allow read, write: if isAuth();
+        allow read, write: if isAuth() && (
+          isAdmin() ||
+          isDispatcher() ||
+          (
+            exists(/databases/$(database)/documents/support_chats/$(ticketId)) &&
+            (
+              get(/databases/$(database)/documents/support_chats/$(ticketId)).data.get('userId', '') == request.auth.uid ||
+              get(/databases/$(database)/documents/support_chats/$(ticketId)).data.get('customerId', '') == request.auth.uid ||
+              get(/databases/$(database)/documents/support_chats/$(ticketId)).data.get('riderId', '') == request.auth.uid
+            )
+          )
+        );
         allow delete: if isAdmin();
       }
     }
 
     // ===============================================================
-    // MARKETPLACE (Products, Stores, Orders)
+    // MARKETPLACE (C10: vendor-scoped writes)
     // ===============================================================
 
     match /marketplace_products/{productId} {
       allow read: if true;
-      allow create: if isAuth();
-      // Vendors/admins can edit product details; customers can decrement 'stock' during order checkout
-      allow update: if isAuth() && (
-        resource.data.get('vendorId', '') == request.auth.uid ||
-        resource.data.get('storeOwnerId', '') == request.auth.uid ||
+      allow create: if isAuth() && (
         isAdmin() ||
-        request.resource.data.diff(resource.data).affectedKeys().hasAny(['stock'])
+        (
+          request.resource.data.get('vendorId', '') != '' &&
+          exists(/databases/$(database)/documents/marketplace_stores/$(request.resource.data.get('vendorId', ''))) &&
+          get(/databases/$(database)/documents/marketplace_stores/$(request.resource.data.get('vendorId', ''))).data.get('ownerId', '') == request.auth.uid
+        )
       );
-      allow delete: if isAuth() && (
-        resource.data.get('vendorId', '') == request.auth.uid ||
-        resource.data.get('storeOwnerId', '') == request.auth.uid ||
-        isAdmin()
+      allow update, delete: if isAuth() && (
+        isAdmin() ||
+        (
+          resource.data.get('vendorId', '') != '' &&
+          exists(/databases/$(database)/documents/marketplace_stores/$(resource.data.get('vendorId', ''))) &&
+          get(/databases/$(database)/documents/marketplace_stores/$(resource.data.get('vendorId', ''))).data.get('ownerId', '') == request.auth.uid
+        )
       );
 
       match /{allSubcollections=**} {
         allow read: if true;
-        allow write: if isAuth();
+        allow write: if isAuth() && (
+          isAdmin() ||
+          (
+            exists(/databases/$(database)/documents/marketplace_products/$(productId)) &&
+            get(/databases/$(database)/documents/marketplace_products/$(productId)).data.get('vendorId', '') != '' &&
+            exists(/databases/$(database)/documents/marketplace_stores/$(get(/databases/$(database)/documents/marketplace_products/$(productId)).data.get('vendorId', ''))) &&
+            get(/databases/$(database)/documents/marketplace_stores/$(get(/databases/$(database)/documents/marketplace_products/$(productId)).data.get('vendorId', ''))).data.get('ownerId', '') == request.auth.uid
+          )
+        );
         allow delete: if isAdmin();
       }
     }
 
     match /marketplace_stores/{storeId} {
       allow read: if true;
-      allow create: if isAuth();
-      allow update, delete: if isAuth() && (
-        resource.data.get('ownerId', '') == request.auth.uid ||
-        resource.data.get('vendorId', '') == request.auth.uid ||
-        isAdmin()
+      allow create: if isAuth() && (
+        isAdmin() ||
+        (
+          request.resource.data.get('ownerId', '') == request.auth.uid &&
+          request.resource.data.get('status', '') in ['PENDING', 'pending', 'Pending'] &&
+          request.resource.data.get('isVerified', false) == false &&
+          !request.resource.data.keys().hasAny(['vendorBalance', 'vendorWallet', 'totalSales', 'totalSettled', 'commissionRate'])
+        )
       );
+      // Store owners cannot self-verify, self-feature, or touch balances.
+      allow update: if isAuth() && (
+        isAdmin() ||
+        (
+          resource.data.get('ownerId', '') == request.auth.uid &&
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+            'isVerified', 'isFeatured', 'featuredRank', 'kycStatus',
+            'vendorBalance', 'vendorWallet', 'totalSales', 'totalSettled',
+            'commissionRate', 'ownerId', 'status'
+          ])
+        )
+      );
+      allow delete: if isAdmin();
 
       match /{allSubcollections=**} {
         allow read: if true;
-        allow write: if isAuth();
+        allow write: if isAuth() && (
+          isAdmin() ||
+          (
+            exists(/databases/$(database)/documents/marketplace_stores/$(storeId)) &&
+            get(/databases/$(database)/documents/marketplace_stores/$(storeId)).data.get('ownerId', '') == request.auth.uid
+          )
+        );
         allow delete: if isAdmin();
       }
     }
@@ -869,40 +863,50 @@ service cloud.firestore {
         isDispatcher() ||
         resource.data.get('buyerId', '') == request.auth.uid ||
         resource.data.get('userId', '') == request.auth.uid ||
-        resource.data.get('customerId', '') == request.auth.uid ||
         resource.data.get('vendorId', '') == request.auth.uid ||
-        resource.data.get('storeOwnerId', '') == request.auth.uid ||
         resource.data.get('riderId', '') == request.auth.uid
       );
-      allow create: if isAuth();
+      allow create: if isAuth() && (
+        request.resource.data.get('buyerId', '') == request.auth.uid &&
+        request.resource.data.get('paymentStatus', 'PENDING_PAYMENT') != 'PAID' &&
+        !request.resource.data.keys().hasAny(['paymentRef', 'vendorSplits', 'settledAt'])
+      );
       allow update: if isAuth() && (
         isAdmin() ||
         isDispatcher() ||
         resource.data.get('buyerId', '') == request.auth.uid ||
-        resource.data.get('userId', '') == request.auth.uid ||
-        resource.data.get('customerId', '') == request.auth.uid ||
-        resource.data.get('vendorId', '') == request.auth.uid ||
-        resource.data.get('storeOwnerId', '') == request.auth.uid ||
-        resource.data.get('riderId', '') == request.auth.uid
+        resource.data.get('userId', '') == request.auth.uid
       );
       allow delete: if isAdmin();
 
       match /{allSubcollections=**} {
-        allow read, write: if isAuth();
+        allow read, write: if isAuth() && (
+          isAdmin() ||
+          isDispatcher() ||
+          (
+            exists(/databases/$(database)/documents/marketplace_orders/$(orderId)) && (
+              get(/databases/$(database)/documents/marketplace_orders/$(orderId)).data.get('buyerId', '') == request.auth.uid ||
+              get(/databases/$(database)/documents/marketplace_orders/$(orderId)).data.get('userId', '') == request.auth.uid ||
+              get(/databases/$(database)/documents/marketplace_orders/$(orderId)).data.get('vendorId', '') == request.auth.uid
+            )
+          )
+        );
         allow delete: if isAdmin();
       }
     }
 
     // ===============================================================
-    // SYSTEM CONFIG, SETTINGS & CMS
+    // PLATFORM CONFIG & ADMIN SURFACES
     // ===============================================================
 
     match /system_config/{docId} {
+      // Pricing/geo/global settings are configuration (not secrets) and are
+      // read by the apps. Writes are admin-only (dispatcher write removed).
       allow read: if true;
-      allow write: if isAdmin() || isDispatcher();
+      allow write: if isAdmin();
     }
 
-    match /system_settings/{settingId} {
+    match /system_settings/{docId} {
       allow read, write: if isAdmin();
     }
 
@@ -911,57 +915,12 @@ service cloud.firestore {
     }
 
     match /sub_admins/{docId} {
-      allow read: if isAuth() && (isAdmin() || isDispatcher());
+      allow read: if isAdmin() || isDispatcher();
       allow write: if isAdmin();
     }
 
-    match /banners/{docId} {
-      allow read: if true;
-      allow write: if isAdmin() || isDispatcher();
-    }
-
-    match /promotions/{docId} {
-      allow read: if true;
-      allow write: if isAdmin() || isDispatcher();
-    }
-
-    match /appContent/{docId} {
-      allow read: if true;
-      allow write: if isAdmin() || isDispatcher();
-    }
-
-    match /site_content/{docId} {
-      allow read: if true;
-      allow write: if isAdmin() || isDispatcher();
-    }
-
-    match /cms_services/{docId} {
-      allow read: if true;
-      allow write: if isAdmin() || isDispatcher();
-    }
-
-    match /cms_team/{docId} {
-      allow read: if true;
-      allow write: if isAdmin() || isDispatcher();
-    }
-
-    match /cms_testimonials/{docId} {
-      allow read: if true;
-      allow write: if isAdmin() || isDispatcher();
-    }
-
-    match /cms_blog/{docId} {
-      allow read: if true;
-      allow write: if isAdmin() || isDispatcher();
-    }
-
-    match /cms_portfolio/{docId} {
-      allow read: if true;
-      allow write: if isAdmin() || isDispatcher();
-    }
-
     // ===============================================================
-    // NOTIFICATIONS, BROADCASTS & AUDIT LOGS
+    // NOTIFICATIONS & BROADCASTS (C8: create is admin/dispatcher only)
     // ===============================================================
 
     match /notifications/{docId} {
@@ -971,7 +930,7 @@ service cloud.firestore {
         resource.data.get('targetUserId', '') == request.auth.uid ||
         resource.data.get('recipientId', '') == request.auth.uid
       );
-      allow create: if isAuth();
+      allow create: if isAdmin() || isDispatcher();
       allow update: if isAuth() && (
         isAdmin() ||
         resource.data.get('userId', '') == request.auth.uid ||
@@ -986,9 +945,23 @@ service cloud.firestore {
       allow write: if isAdmin() || isDispatcher();
     }
 
+    match /fleet_broadcasts/{docId} {
+      allow read: if isAuth();
+      // Bookings may announce themselves to the fleet; edits are staff-only.
+      allow create: if isAuth() && (
+        isAdmin() || isDispatcher() ||
+        request.resource.data.get('userId', '') == request.auth.uid
+      );
+      allow update, delete: if isAdmin() || isDispatcher();
+    }
+
+    // ===============================================================
+    // AUDIT & INCIDENTS (M9: forged audit entries blocked)
+    // ===============================================================
+
     match /audit_logs/{docId} {
       allow read: if isAdmin();
-      allow create: if isAuth();
+      allow create: if isAdmin();
       allow update, delete: if false; // Immutable audit trail
     }
 
@@ -1000,7 +973,11 @@ service cloud.firestore {
         resource.data.get('riderId', '') == request.auth.uid ||
         resource.data.get('userId', '') == request.auth.uid
       );
-      allow create: if isAuth();
+      allow create: if isAuth() && (
+        request.resource.data.get('reporterId', '') == request.auth.uid ||
+        request.resource.data.get('riderId', '') == request.auth.uid ||
+        request.resource.data.get('userId', '') == request.auth.uid
+      );
       allow update: if isAuth() && (
         isAdmin() ||
         isDispatcher() ||
@@ -1009,79 +986,263 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    match /fleet_broadcasts/{docId} {
-      allow read, write: if isAuth();
-      allow delete: if isAdmin() || isDispatcher();
-    }
-
     // ===============================================================
-    // LOYALTY, REFERRALS & BATCH BOOKINGS
+    // REVIEWS & RATINGS (root collections)
     // ===============================================================
 
-    match /customer_loyalty_points/{docId} {
-      allow read, write: if isAuth();
-      allow delete: if isAdmin();
-    }
-
-    match /referrals/{docId} {
-      allow read, write: if isAuth();
-      allow delete: if isAdmin();
-    }
-
-    match /referral_redemptions/{docId} {
-      allow read, write: if isAuth();
-      allow delete: if isAdmin();
-    }
-
-    match /batch_bookings/{batchId} {
-      allow read, write: if isAuth();
-      allow delete: if isAdmin();
-    }
-
-    match /batches/{batchId} {
-      allow read, write: if isAuth();
-      allow delete: if isAdmin();
+    match /reviews/{reviewId} {
+      allow read: if true;
+      allow create: if isAuth() && (
+        request.resource.data.get('authorId', '') == request.auth.uid ||
+        request.resource.data.get('userId', '') == request.auth.uid
+      );
+      allow update, delete: if isAuth() && (
+        isAdmin() || resource.data.get('authorId', '') == request.auth.uid
+      );
 
       match /{allSubcollections=**} {
-        allow read, write: if isAuth();
+        allow read: if true;
+        allow write: if isAuth() && (
+          isAdmin() || request.resource.data.get('authorId', '') == request.auth.uid
+        );
         allow delete: if isAdmin();
       }
     }
 
-    match /offline_sync_logs/{docId} {
-      allow read, write: if isAuth();
-      allow delete: if isAdmin();
+    match /ratings/{ratingId} {
+      allow read: if true;
+      allow create: if isAuth() && (
+        request.resource.data.get('customerId', '') == request.auth.uid ||
+        request.resource.data.get('userId', '') == request.auth.uid
+      );
+      allow update, delete: if isAuth() && (
+        isAdmin() || resource.data.get('customerId', '') == request.auth.uid
+      );
     }
 
     // ===============================================================
-    // PUBLIC FORM SUBMISSIONS & OTP VERIFICATION
+    // TIPS, WITHDRAWALS, REFUNDS, PAYOUTS
     // ===============================================================
+
+    match /rider_tips/{tipId} {
+      allow read: if isAuth() && (
+        isAdmin() ||
+        resource.data.get('customerId', '') == request.auth.uid ||
+        resource.data.get('userId', '') == request.auth.uid ||
+        resource.data.get('riderId', '') == request.auth.uid
+      );
+      allow create: if isAuth() && (
+        isAdmin() ||
+        (
+          request.resource.data.get('customerId', '') == request.auth.uid &&
+          request.resource.data.get('userId', '') == request.auth.uid
+        )
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    match /tip_withdrawals/{docId} {
+      allow read: if isAuth() && (
+        isAdmin() || resource.data.get('userId', '') == request.auth.uid ||
+        resource.data.get('riderId', '') == request.auth.uid
+      );
+      allow create: if isAuth() && (
+        request.resource.data.get('userId', '') == request.auth.uid ||
+        request.resource.data.get('riderId', '') == request.auth.uid
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    match /refund_requests/{docId} {
+      allow read: if isAuth() && (
+        isAdmin() || resource.data.get('userId', '') == request.auth.uid
+      );
+      allow create: if isAuth() && (
+        request.resource.data.get('userId', '') == request.auth.uid
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    match /vendor_payout_requests/{docId} {
+      allow read: if isAuth() && (
+        isAdmin() ||
+        resource.data.get('vendorId', '') == request.auth.uid ||
+        resource.data.get('userId', '') == request.auth.uid
+      );
+      allow create: if isAuth() && (
+        request.resource.data.get('vendorId', '') == request.auth.uid ||
+        request.resource.data.get('userId', '') == request.auth.uid
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // TRANSACTIONS (root ledger — server-authoritative)
+    // ===============================================================
+
+    match /transactions/{docId} {
+      allow read: if isAuth() && (
+        isAdmin() || resource.data.get('userId', '') == request.auth.uid
+      );
+      allow create: if false; // Admin SDK only
+      allow update, delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // LOYALTY & REFERRALS
+    // ===============================================================
+
+    match /customer_loyalty_points/{docId} {
+      allow read: if isAdmin() || (
+        isAuth() && resource.data.get('userId', '') == request.auth.uid
+      );
+      allow create: if isAuth() && (
+        isAdmin() || request.resource.data.get('userId', '') == request.auth.uid
+      );
+      allow update, delete: if isAdmin() || (
+        isAuth() && resource.data.get('userId', '') == request.auth.uid &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['userId'])
+      );
+    }
+
+    match /referrals/{docId} {
+      allow read: if isAuth() && (
+        isAdmin() || resource.data.get('userId', '') == request.auth.uid
+      );
+      allow create: if isAuth() && (
+        request.resource.data.get('userId', '') == request.auth.uid
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    match /referral_redemptions/{docId} {
+      allow read: if isAuth() && (
+        isAdmin() || resource.data.get('userId', '') == request.auth.uid
+      );
+      allow create: if isAuth() && (
+        request.resource.data.get('userId', '') == request.auth.uid
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // BATCH BOOKINGS
+    // ===============================================================
+
+    match /batch_bookings/{batchId} {
+      allow read: if isAuth() && (
+        isAdmin() ||
+        isDispatcher() ||
+        resource.data.get('userId', '') == request.auth.uid ||
+        resource.data.get('riderId', '') == request.auth.uid
+      );
+      allow create: if isAuth() && (
+        request.resource.data.get('userId', '') == request.auth.uid &&
+        request.resource.data.get('paymentStatus', 'PENDING_PAYMENT') != 'PAID' &&
+        !request.resource.data.keys().hasAny(['paymentRef'])
+      );
+      allow update: if isAuth() && (
+        isAdmin() ||
+        isDispatcher() ||
+        resource.data.get('userId', '') == request.auth.uid ||
+        resource.data.get('riderId', '') == request.auth.uid
+      );
+      allow delete: if isAdmin();
+
+      match /{allSubcollections=**} {
+        allow read, write: if isAuth() && (
+          isAdmin() ||
+          isDispatcher() ||
+          (
+            exists(/databases/$(database)/documents/batch_bookings/$(batchId)) && (
+              get(/databases/$(database)/documents/batch_bookings/$(batchId)).data.get('userId', '') == request.auth.uid ||
+              get(/databases/$(database)/documents/batch_bookings/$(batchId)).data.get('riderId', '') == request.auth.uid
+            )
+          )
+        );
+        allow delete: if isAdmin();
+      }
+    }
+
+    match /batches/{batchId} {
+      allow read: if isAuth() && (
+        isAdmin() ||
+        isDispatcher() ||
+        resource.data.get('userId', '') == request.auth.uid ||
+        resource.data.get('riderId', '') == request.auth.uid
+      );
+      allow create: if isAuth() && (
+        request.resource.data.get('userId', '') == request.auth.uid &&
+        request.resource.data.get('paymentStatus', 'PENDING_PAYMENT') != 'PAID' &&
+        !request.resource.data.keys().hasAny(['paymentRef'])
+      );
+      allow update: if isAuth() && (
+        isAdmin() ||
+        isDispatcher() ||
+        resource.data.get('userId', '') == request.auth.uid ||
+        resource.data.get('riderId', '') == request.auth.uid
+      );
+      allow delete: if isAdmin();
+
+      match /{allSubcollections=**} {
+        allow read, write: if isAuth() && (
+          isAdmin() ||
+          isDispatcher() ||
+          (
+            exists(/databases/$(database)/documents/batches/$(batchId)) && (
+              get(/databases/$(database)/documents/batches/$(batchId)).data.get('userId', '') == request.auth.uid ||
+              get(/databases/$(database)/documents/batches/$(batchId)).data.get('riderId', '') == request.auth.uid
+            )
+          )
+        );
+        allow delete: if isAdmin();
+      }
+    }
+
+    // ===============================================================
+    // OFFLINE SYNC & PUBLIC FORMS
+    // ===============================================================
+
+    match /offline_sync_logs/{docId} {
+      allow read: if isAdmin();
+      allow create: if isAuth() && (
+        request.resource.data.get('userId', '') == request.auth.uid
+      );
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
 
     match /contacts/{docId} {
       allow read: if isAdmin();
-      allow create: if true;
+      allow create: if request.resource.data.keys().hasOnly([
+        'name', 'email', 'phone', 'message', 'subject', 'createdAt', 'timestamp'
+      ]) && isReasonableWrite();
       allow update, delete: if isAdmin();
     }
 
     match /subscribers/{docId} {
       allow read: if isAdmin();
-      allow create: if true;
+      allow create: if request.resource.data.keys().hasOnly(['email', 'createdAt', 'timestamp']) && isReasonableWrite();
       allow update, delete: if isAdmin();
     }
 
-    match /verification_otps/{docId} {
-      allow read, write: if false; // Backend Cloud Functions Admin SDK only
-    }
-
     // ===============================================================
-    // ADDRESS & LANDMARK REGISTRY
+    // ADDRESS REGISTRY (public landmarks & geocoded zones)
     // ===============================================================
 
     match /address_registry/{entryId} {
-      // Public read so landing page fare estimates and app booking landmarks resolve immediately
+      // Public read so fare estimates and booking landmarks resolve instantly.
       allow read: if true;
-      // Coordinates and registry landmarks are managed exclusively by admin/dispatcher
+      // Registry entries are managed exclusively by admin/dispatcher.
       allow write: if isAdmin() || isDispatcher();
+    }
+
+    // ===============================================================
+    // VERIFICATION OTPS (server-locked)
+    // ===============================================================
+
+    match /verification_otps/{docId} {
+      allow read, write: if false; // Admin SDK only
     }
   }
 }

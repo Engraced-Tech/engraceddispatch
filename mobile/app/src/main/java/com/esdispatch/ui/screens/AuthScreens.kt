@@ -1,4 +1,4 @@
-package com.esdispatch.ui.screens
+﻿package com.esdispatch.ui.screens
 
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.layout.ContentScale
@@ -684,7 +684,7 @@ fun LoginScreen(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "Hotline: +234 803 123 4567\nEmail: support@ESDispatch.com\nAvailable: 24/7 Premium Logistics",
+                        text = "Hotline: +234 905 626 3010\nEmail: support@engracedsmile.com\nAvailable: 24/7 Premium Logistics",
                         fontWeight = FontWeight.SemiBold,
                         color = if (isDark) Gold else Obsidian,
                         fontSize = 14.sp
@@ -699,7 +699,7 @@ fun LoginScreen(
                             val dialIntent = android.content.Intent(android.content.Intent.ACTION_DIAL, android.net.Uri.parse("tel:+2348031234567"))
                             context.startActivity(dialIntent)
                         } catch (e: Exception) {
-                            Toast.makeText(context, "Direct dial not available. Please call +234 803 123 4567.", Toast.LENGTH_LONG).show()
+                            Toast.makeText(context, "Direct dial not available. Please call +234 905 626 3010.", Toast.LENGTH_LONG).show()
                         }
                     }
                 ) {

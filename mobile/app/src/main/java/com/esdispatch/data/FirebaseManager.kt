@@ -1,4 +1,4 @@
-package com.esdispatch.data
+﻿package com.esdispatch.data
 
 import android.content.Context
 import android.util.Log
@@ -252,8 +252,12 @@ object FirebaseManager {
                                     onComplete(PhoneAvailability.AVAILABLE)
                                 }
                             }
-                            .addOnFailureListener {
-                                onComplete(PhoneAvailability.AVAILABLE)
+                            .addOnFailureListener { err ->
+                                // Fail CLOSED (audit L1): never report AVAILABLE on
+                                // lookup errors — delegate to the server callable.
+                                Log.w(TAG, "users phone lookup failed: ${err.message}")
+                                val fallbackPhone = if (norm.isNotBlank()) norm else clean
+                                checkPhoneViaCallable(fallbackPhone, currentUid, onComplete)
                             }
                     } else {
                         onComplete(PhoneAvailability.AVAILABLE)
@@ -435,13 +439,16 @@ object FirebaseManager {
         if (phone.isNotBlank()) {
             val norm = com.esdispatch.util.FormatUtils.normalizePhoneNumber(phone)
             val docKey = com.esdispatch.util.FormatUtils.phoneIndexKey(phone)
-            val isPlaceholder = docKey == "2348031234567" || docKey == "08000000000" || docKey.all { c -> c == '0' }
+            val isPlaceholder = docKey == "2348031234567" || docKey == "2349056263010" || docKey == "08000000000" || docKey.all { c -> c == '0' }
             if (!isPlaceholder && docKey.length >= 10) {
                 userMap["phone"] = norm
                 reservePhoneNumber(userId, norm) { _, _ -> }
             }
         }
-        if (!role.isNullOrBlank()) {
+        if (!role.isNullOrBlank() && role != "rider") {
+            // C2 remediation: the rider role is granted exclusively by the
+            // admin-approval flow (onRiderApplicationApproved). Clients never
+            // write the rider role to their profile document.
             userMap["role"] = role
         }
         if (bikeNumber.isNotBlank()) {
@@ -754,9 +761,10 @@ object FirebaseManager {
 
         val batch = db.batch()
         val userTxRef = db.collection("users").document(userId).collection("transactions").document(transactionId)
-        val rootTxRef = db.collection("transactions").document(transactionId)
         batch.set(userTxRef, txnMap)
-        batch.set(rootTxRef, txnMap)
+        // Note: the root `transactions` collection is server-authoritative
+        // (rules lock client creates). The user-scoped mirror above retains
+        // the full history; the platform ledger is written by Cloud Functions.
 
         batch.commit()
             .addOnSuccessListener {
@@ -869,17 +877,9 @@ object FirebaseManager {
             "width" to parcel.width,
             "height" to parcel.height,
             "price" to parcel.price,
-            "courierName" to parcel.courierName,
-            "courierPhone" to parcel.courierPhone,
-            "courierAvatar" to parcel.courierAvatar,
-            "progress" to parcel.progress,
             "dateString" to parcel.dateString,
             "userId" to effectiveUserId,
             "riderId" to parcel.riderId,
-            "riderBikeNumber" to parcel.riderBikeNumber,
-            "otpCode" to parcel.otpCode,
-            "otpExpiresAt" to (System.currentTimeMillis() + 24 * 60 * 60 * 1000L),
-            "otpVerified" to parcel.otpVerified,
             "isRated" to parcel.isRated,
             "customerRating" to parcel.customerRating,
             "tipAmount" to parcel.tipAmount,
@@ -890,8 +890,6 @@ object FirebaseManager {
             "pickupLng" to parcel.pickupLng,
             "deliveryLat" to parcel.deliveryLat,
             "deliveryLng" to parcel.deliveryLng,
-            "podType" to parcel.podType,
-            "podUrl" to parcel.podUrl,
             "batchId" to parcel.batchId,
             "isBatch" to parcel.isBatch,
             "batchItemId" to parcel.batchItemId,
@@ -909,9 +907,8 @@ object FirebaseManager {
             "disputeNotes" to parcel.disputeNotes,
             "declaredValue" to parcel.declaredValue,
             "senderEmail" to parcel.senderEmail,
-            "pickupPhotoUrl" to parcel.pickupPhotoUrl,
             "feedbackDismissed" to parcel.feedbackDismissed,
-            "paymentStatus" to parcel.paymentStatus.ifBlank { "PAID" },
+            "paymentStatus" to parcel.paymentStatus.ifBlank { "PENDING_PAYMENT" },
             "paymentMethod" to "WALLET",
             "lastUpdated" to System.currentTimeMillis()
         )
@@ -1051,7 +1048,8 @@ object FirebaseManager {
         val courierLastUpdated = doc.getSafeLong("courierLastUpdated", 0L)
         val riderId = doc.getString("riderId")?.takeIf { it.isNotBlank() } ?: doc.getString("driverId") ?: ""
         val riderBikeNumber = doc.getString("riderBikeNumber") ?: ""
-        val otpCode = doc.getString("otpCode") ?: ""
+        // C3: plaintext handover codes are never parsed into client models.
+        // Verification is server-side; owners display codes fetched in-session.
         val otpVerified = doc.getSafeBoolean("otpVerified", false)
         val isRated = doc.getSafeBoolean("isRated", false)
         val customerRating = doc.getSafeDouble("customerRating", 0.0)
@@ -1121,7 +1119,6 @@ object FirebaseManager {
             additionalStops = additionalStops,
             riderId = riderId,
             riderBikeNumber = riderBikeNumber,
-            otpCode = otpCode,
             otpVerified = otpVerified,
             isRated = isRated,
             customerRating = customerRating,
@@ -1340,7 +1337,7 @@ object FirebaseManager {
             )
             if (snapshot != null && snapshot.exists()) {
                 val id = snapshot.getString("id") ?: parcelId
-                val itemName = snapshot.getString("itemName") ?: "Mac mini M2"
+                val itemName = snapshot.getString("itemName") ?: "Parcel"
                 val imageUrl = snapshot.getString("imageUrl") ?: ""
                 val statusStr = snapshot.getString("status") ?: ParcelStatus.TRANSIT.name
                 val status = try { ParcelStatus.valueOf(statusStr) } catch(e: Exception) { ParcelStatus.TRANSIT }
@@ -1368,7 +1365,7 @@ object FirebaseManager {
                 val userId = snapshot.getString("userId") ?: ""
                 val riderId = snapshot.getString("riderId") ?: ""
                 val riderBikeNumber = snapshot.getString("riderBikeNumber") ?: ""
-                val otpCode = snapshot.getString("otpCode") ?: ""
+                // C3: handover codes are never parsed into client models.
                 val isRated = snapshot.getSafeBoolean("isRated", false)
                 val customerRating = snapshot.getSafeDouble("customerRating", 0.0)
                 val tipAmount = snapshot.getSafeDouble("tipAmount", 0.0)
@@ -1404,7 +1401,6 @@ object FirebaseManager {
                     initialCourierLng = initialCourierLng,
                     riderId = riderId,
                     riderBikeNumber = riderBikeNumber,
-                    otpCode = otpCode,
                     otpVerified = otpVerified,
                     isRated = isRated,
                     customerRating = customerRating,
@@ -1556,7 +1552,7 @@ object FirebaseManager {
                             val initialCourierLng = doc.getSafeDoubleNullable("initialCourierLng")
                             val riderId = doc.getString("riderId") ?: ""
                             val riderBikeNumber = doc.getString("riderBikeNumber") ?: ""
-                            val otpCode = doc.getString("otpCode") ?: ""
+                            // C3: handover codes are never parsed into client models.
                             val isRated = doc.getSafeBoolean("isRated", false)
                             val customerRating = doc.getSafeDouble("customerRating", 0.0)
                             val tipAmount = doc.getSafeDouble("tipAmount", 0.0)
@@ -1592,7 +1588,6 @@ object FirebaseManager {
                                 initialCourierLng = initialCourierLng,
                                 riderId = riderId,
                                 riderBikeNumber = riderBikeNumber,
-                                otpCode = otpCode,
                                 otpVerified = otpVerified,
                                 isRated = isRated,
                                 customerRating = customerRating,
@@ -1894,7 +1889,8 @@ object FirebaseManager {
             "deliveryLat" to parcel.deliveryLat,
             "deliveryLng" to parcel.deliveryLng,
             "createdAt" to System.currentTimeMillis(),
-            "status" to parcel.status.name
+            "status" to parcel.status.name,
+            "userId" to parcel.userId
         )
         db.collection("fleet_broadcasts").document(parcel.id)
             .set(broadcastMap, com.google.firebase.firestore.SetOptions.merge())

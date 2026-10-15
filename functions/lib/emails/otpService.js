@@ -37,26 +37,31 @@ exports.createAndStoreOtp = createAndStoreOtp;
 exports.verifyOtpCode = verifyOtpCode;
 const crypto = __importStar(require("crypto"));
 const firestore_1 = require("firebase-admin/firestore");
-const OTP_PEPPER = 'ESDISPATCH_OTP_SECURE_PEPPER_2026';
+const OTP_PEPPER = (process.env.OTP_PEPPER || 'ESDISPATCH_OTP_SECURE_PEPPER_2026').trim();
 const MAX_ATTEMPTS = 5;
 /**
- * Computes a SHA-256 hash of the 6-digit code with pepper.
+ * Computes an HMAC-SHA256 hash of the code with a server-side pepper.
  */
 function hashOtp(code) {
     return crypto.createHmac('sha256', OTP_PEPPER).update(code.trim()).digest('hex');
 }
+function safeEqual(a, b) {
+    const bufA = Buffer.from(a, 'utf8');
+    const bufB = Buffer.from(b, 'utf8');
+    if (bufA.length !== bufB.length) {
+        return false;
+    }
+    return crypto.timingSafeEqual(bufA, bufB);
+}
 /**
- * Records a 6-digit OTP in Firestore and returns it. When the caller supplies
- * a code (the app generates and verifies one source of truth), that code is
- * used; otherwise a cryptographically strong one is generated.
+ * Records a server-generated 6-digit OTP in Firestore and returns it.
+ * Codes are NEVER caller-supplied — the server is the single source of truth
+ * (remediation of audit finding C7).
  */
-async function createAndStoreOtp(email, purpose, expiryMinutes = 10, providedCode) {
+async function createAndStoreOtp(email, purpose, expiryMinutes = 10) {
     const db = (0, firestore_1.getFirestore)();
     const normalizedEmail = email.toLowerCase().trim();
-    const trimmedProvided = (providedCode || '').trim();
-    const code = /^\d{6}$/.test(trimmedProvided)
-        ? trimmedProvided
-        : crypto.randomInt(100000, 1000000).toString();
+    const code = crypto.randomInt(100000, 1000000).toString();
     const hashedCode = hashOtp(code);
     const now = new Date();
     const expiresAt = new Date(now.getTime() + expiryMinutes * 60 * 1000);
@@ -112,7 +117,7 @@ async function verifyOtpCode(email, purpose, rawCode) {
         return { valid: false, message: 'Maximum attempts exceeded. This code is invalidated. Please request a new one.' };
     }
     const inputHash = hashOtp(rawCode);
-    if (inputHash !== data.hashedCode) {
+    if (!safeEqual(inputHash, String(data.hashedCode))) {
         await otpRef.update({
             attempts: firestore_1.FieldValue.increment(1),
         });

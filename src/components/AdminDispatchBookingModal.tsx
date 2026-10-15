@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+﻿import React, { useState, useEffect, useRef, useMemo } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import {
@@ -287,7 +287,7 @@ export const AdminDispatchBookingModal: React.FC<AdminDispatchBookingModalProps>
 
     searchDebounceRef.current = setTimeout(async () => {
       try {
-        const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "AIzaSyCnYpvx0peHOafunoZcPMIIhd7Y-pM0NAs";
+        const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || import.meta.env.VITE_MAPS_API_KEY || "AIzaSyCnYpvx0peHOafunoZcPMIIhd7Y-pM0NAs";
         const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(
           q
         )}&location=6.3350,5.6037&radius=30000&components=country:ng&key=${apiKey}`;
@@ -464,8 +464,8 @@ export const AdminDispatchBookingModal: React.FC<AdminDispatchBookingModalProps>
 
     setIsSubmitting(true);
     try {
-      // Generate 4-digit Handover PIN
-      const otpCode = Math.floor(1000 + Math.random() * 9000).toString();
+      // Handover codes are minted server-side when the courier arrives
+      // (audit finding C3 remediation) — no client-generated PIN here.
 
       let assignedDriver: any = null;
       let finalStatus = "PENDING";
@@ -500,9 +500,12 @@ export const AdminDispatchBookingModal: React.FC<AdminDispatchBookingModalProps>
         price: finalFare,
         deliveryFee: finalFare,
         tipAmount: 0,
-        otpCode,
         status: finalStatus,
         paymentStatus: "PAID",
+        // Admin bookings are reviewed dispatches: mark the settlement as
+        // pre-approved so escrow can release rider earnings on delivery.
+        settlementApproved: true,
+        settlementApprovedBy: "admin_dispatch_tool",
         bookingSource: "admin_dispatch_tool",
         riderId: assignedDriver ? assignedDriver.id : "",
         driverId: assignedDriver ? assignedDriver.id : "",
@@ -524,9 +527,8 @@ export const AdminDispatchBookingModal: React.FC<AdminDispatchBookingModalProps>
           await setDoc(custNotif, {
             id: custNotif.id,
             title: "Shipment Dispatched",
-            message: `Dispatch #${docRef.id.slice(0, 8).toUpperCase()} (${itemName}) booked by Smiles Dispatch team. Your handover PIN is ${otpCode}.`,
+            message: `Dispatch #${docRef.id.slice(0, 8).toUpperCase()} (${itemName}) booked by Smiles Dispatch team. The handover code will be sent when your courier arrives.`,
             parcelId: docRef.id,
-            otpCode,
             isRead: false,
             createdAt: Timestamp.now()
           });
@@ -557,7 +559,7 @@ export const AdminDispatchBookingModal: React.FC<AdminDispatchBookingModalProps>
         `Created delivery #${docRef.id.slice(0, 8).toUpperCase()} (${itemName}) for ${senderName} -> ${receiverName}. Status: ${finalStatus}`
       );
 
-      addToast?.("success", `Shipment #${docRef.id.slice(0, 8).toUpperCase()} booked successfully! Handover PIN: ${otpCode}`);
+      addToast?.("success", `Shipment #${docRef.id.slice(0, 8).toUpperCase()} booked successfully! The handover code will be sent to the recipient on arrival.`);
       onSuccess?.(docRef.id);
       onClose();
     } catch (e: any) {

@@ -1,5 +1,6 @@
-import { NextRequest, NextResponse } from "next/server";
+﻿import { NextRequest, NextResponse } from "next/server";
 import * as nodemailer from "nodemailer";
+import * as crypto from "crypto";
 import { renderAccountVerificationEmail, extractPlainTextFromHtml } from "@/lib/emailTemplates";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +18,7 @@ const DEFAULT_CONFIG = {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { email, name, userId, otp: providedOtp, verificationLink } = body;
+    const { email, name, userId, verificationLink } = body;
 
     const recipientEmail = (email || "").trim().toLowerCase();
     if (!recipientEmail || !recipientEmail.includes("@")) {
@@ -28,7 +29,8 @@ export async function POST(req: NextRequest) {
     }
 
     const recipientName = (name || "Valued Client").trim();
-    const otp = (providedOtp || "").toString().trim() || Math.floor(100000 + Math.random() * 900000).toString();
+    // C7 remediation: the code is always generated server-side with a CSPRNG.
+    const otp = crypto.randomInt(100000, 1000000).toString();
 
     const host = (process.env.SMTP_HOST || DEFAULT_CONFIG.host).trim();
     const port = Number(process.env.SMTP_PORT || DEFAULT_CONFIG.port);

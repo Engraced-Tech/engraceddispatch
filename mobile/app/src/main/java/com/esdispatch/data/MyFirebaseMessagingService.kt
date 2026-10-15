@@ -1,4 +1,4 @@
-package com.esdispatch.data
+﻿package com.esdispatch.data
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -131,10 +131,12 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                     "Delivery Completions & Credits",
                     NotificationManager.IMPORTANCE_DEFAULT
                 ).apply {
-                    description = "Delivery completions, tips, security PINs, and wallet credits"
+                    description = "Delivery completions, tips, and wallet credits"
                     enableLights(true)
                     lightColor = Color.parseColor("#FFB800")
-                    lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
+                    // C3 remediation: sensitive content (codes/PINs) must not
+                    // render on the lock screen.
+                    lockscreenVisibility = NotificationCompat.VISIBILITY_PRIVATE
                     setSound(generalSoundUri, standardAttributes)
                 }
 
@@ -225,7 +227,14 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setContentIntent(pendingIntent)
                 .setCategory(if (isOngoingDelivery) NotificationCompat.CATEGORY_NAVIGATION else NotificationCompat.CATEGORY_STATUS)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC) // Shows full content on Lock Screen
+                .setVisibility(
+                    if (lower.contains("pin") || lower.contains("otp") || lower.contains("code") || lower.contains("verification")) {
+                        // C3 remediation: sensitive content never renders on the lock screen.
+                        NotificationCompat.VISIBILITY_PRIVATE
+                    } else {
+                        NotificationCompat.VISIBILITY_PUBLIC
+                    }
+                )
                 .setSound(soundUri)
                 .setAutoCancel(!isOngoingDelivery)
                 .setOngoing(isOngoingDelivery) // Pinned to lockscreen while delivery is active

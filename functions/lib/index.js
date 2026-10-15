@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.paystackWebhook = exports.askDispatchAssistant = exports.onDeliveryStatusEmailTrigger = exports.requestPasswordReset = exports.checkPhoneUnique = exports.testSmtpConnection = exports.verifyEmailOtp = exports.sendEmailOtp = exports.onContactCreated = exports.onRiderSubcollectionChanged = exports.onNotificationCreated = exports.onRiderDocumentChanged = exports.processVendorPayout = exports.completeDeliveryWithProof = exports.verifyDeliveryOtp = exports.verifyPaymentAndTopUp = exports.onDeliveryStatusUpdated = exports.onDeliveryCreatedAutoDispatch = exports.onUserCreatedSendWelcome = void 0;
+exports.cancelDelivery = exports.createMarketplaceBooking = exports.requestWalletWithdrawal = exports.createBooking = exports.paystackWebhook = exports.askDispatchAssistant = exports.onDeliveryStatusEmailTrigger = exports.requestPasswordReset = exports.checkPhoneUnique = exports.testSmtpConnection = exports.verifyEmailOtp = exports.sendEmailOtp = exports.onContactCreated = exports.onNotificationCreated = exports.onRiderApplicationApproved = exports.registerRiderApplication = exports.processVendorPayout = exports.completeDeliveryWithProof = exports.getDeliveryOtp = exports.verifyDeliveryOtp = exports.verifyPaymentAndTopUp = exports.onDeliveryStatusUpdated = exports.onDeliveryCreatedAutoDispatch = exports.onUserCreatedSendWelcome = void 0;
 const functions = __importStar(require("firebase-functions"));
 const admin = __importStar(require("firebase-admin"));
 const firestore_1 = require("firebase-admin/firestore");
@@ -140,6 +140,12 @@ exports.onDeliveryCreatedAutoDispatch = functions.firestore
     const deliveryId = context.params.deliveryId;
     const deliveryData = snap.data();
     if (!deliveryData || deliveryData.status !== 'PENDING') {
+        return null;
+    }
+    // Security guard: only server-verified PAID deliveries enter the dispatch
+    // pool. Unpaid guest drafts stay parked until payment is confirmed.
+    if (String(deliveryData.paymentStatus || '').toUpperCase() !== 'PAID') {
+        console.log(`[Auto Dispatch] Delivery ${deliveryId} is not marked PAID; holding out of the dispatch pool.`);
         return null;
     }
     console.log(`[Auto Dispatch] Analyzing dispatch matches for delivery: ${deliveryId}`);
@@ -282,6 +288,29 @@ exports.onDeliveryStatusUpdated = functions.firestore
                 console.log(`[Escrow Release] Delivery ${deliveryId} already settled. Skipping duplicate payout.`);
             }
             else {
+                // ============================================================
+                // SECURITY (C1 remediation): settlements only proceed for
+                // deliveries whose payment was verified server-side. The
+                // `paymentRef` is minted exclusively by server-authoritative
+                // flows (createBooking / verifyPaymentAndTopUp / marketplace
+                // checkout) and stored in the rules-locked `system_ledger`.
+                // Admins may alternatively flag `settlementApproved: true`
+                // after manual review (legacy or COD settlements).
+                // ============================================================
+                const paymentStatus = String(afterData.paymentStatus || '').toUpperCase();
+                const paymentRef = String(afterData.paymentRef || '').trim();
+                const serverLedgerOk = paymentRef.length > 0 &&
+                    (await db.collection('system_ledger').doc(paymentRef).get()).exists;
+                const settlementApproved = afterData.settlementApproved === true;
+                if (!serverLedgerOk && !settlementApproved) {
+                    console.warn(`[Escrow Release] Settlement BLOCKED for ${deliveryId}: no verified payment record ` +
+                        `(paymentStatus=${paymentStatus}, paymentRef='${paymentRef || 'MISSING'}').`);
+                    await change.after.ref.update({
+                        settlementStatus: 'HELD_PENDING_PAYMENT_VERIFICATION',
+                        settlementBlockReason: 'No server-verified payment record found.',
+                    });
+                    return null;
+                }
                 // 1. If linked to a marketplace order, settle vendor split amounts
                 const orderSnap = await db.collection('marketplace_orders').doc(deliveryId).get();
                 if (orderSnap.exists) {
@@ -307,10 +336,20 @@ exports.onDeliveryStatusUpdated = functions.firestore
                 }
                 // 2. Credit rider delivery earnings / tip if riderId present
                 const effectiveRiderId = riderId || afterData.driverId;
-                if (effectiveRiderId) {
+                const selfDealing = Boolean(effectiveRiderId) && effectiveRiderId === userId;
+                if (selfDealing) {
+                    console.warn(`[Escrow Release] Self-dealing settlement BLOCKED for ${deliveryId}: riderId == userId.`);
+                }
+                else if (effectiveRiderId) {
                     const tipAlreadyCredited = afterData.tipCredited === true;
-                    const tipAmount = tipAlreadyCredited ? 0 : (Number(afterData.tipAmount) || 0);
-                    const priceOrFee = Number(afterData.deliveryFee) || Number(afterData.price) || (afterData.type === 'EXPRESS' ? 2500 : 1500);
+                    const rawTip = tipAlreadyCredited ? 0 : (Number(afterData.tipAmount) || 0);
+                    const rawFee = Number(afterData.deliveryFee) || Number(afterData.price) || (afterData.type === 'EXPRESS' ? 2500 : 1500);
+                    // Hard caps: settlement can never exceed platform maxima even if
+                    // the document was tampered with before the trigger ran.
+                    const MAX_SETTLEMENT_FEE = 2500000; // ₦2.5M max delivery fare
+                    const MAX_SETTLEMENT_TIP = 500000; // ₦500K max tip
+                    const tipAmount = Math.min(Math.max(rawTip, 0), MAX_SETTLEMENT_TIP);
+                    const priceOrFee = Math.min(Math.max(rawFee, 0), MAX_SETTLEMENT_FEE);
                     const riderPayout = (priceOrFee * 0.80) + tipAmount; // 80% rider split + uncredited customer tip
                     if (riderPayout > 0) {
                         const riderRef = db.collection('users').doc(effectiveRiderId);
@@ -606,26 +645,87 @@ exports.verifyDeliveryOtp = functions.https.onCall(async (data, context) => {
     if (!isAssignedRider && !isPrivileged) {
         throw new functions.https.HttpsError('permission-denied', 'Only the assigned rider or dispatcher can verify delivery OTP.');
     }
-    const currentAttempts = Number(deliveryData === null || deliveryData === void 0 ? void 0 : deliveryData.otpAttempts) || 0;
-    if (currentAttempts >= 5) {
-        throw new functions.https.HttpsError('failed-precondition', 'Maximum verification attempts exceeded. Please contact dispatch.');
+    // Server-side verification against the salted hash with attempt lockout.
+    // The code itself is never read back from Firestore by any client.
+    const result = await (0, handoverOtpService_1.verifyHandoverOtp)(deliveryId, String(otpInput));
+    if (!result.verified) {
+        throw new functions.https.HttpsError('invalid-argument', result.message);
     }
-    const storedOtp = String((deliveryData === null || deliveryData === void 0 ? void 0 : deliveryData.otpCode) || '').trim();
-    const inputOtp = String(otpInput).trim();
-    if (storedOtp !== inputOtp) {
-        await deliveryRef.update({
-            otpAttempts: firestore_1.FieldValue.increment(1)
-        });
-        throw new functions.https.HttpsError('invalid-argument', 'Invalid OTP code. Please verify with recipient.');
-    }
-    // Handover verified! Ready for Proof of Delivery capture
     await deliveryRef.update({
-        otpVerified: true,
-        otpAttempts: 0,
         status: 'ARRIVED',
-        handoverVerifiedAt: firestore_1.FieldValue.serverTimestamp()
+        handoverVerifiedAt: firestore_1.FieldValue.serverTimestamp(),
+        lastUpdated: Date.now(),
     });
     return { success: true, message: 'OTP verified successfully. Please proceed to capture Proof of Delivery.' };
+});
+/**
+ * Callable Function: issues (or rotates) the recipient's handover code and
+ * returns it. Restricted to the delivery customer, admins, and dispatchers —
+ * the assigned rider is explicitly excluded so the code is never handed to
+ * the party being verified (remediation of audit finding C3).
+ */
+exports.getDeliveryOtp = functions.https.onCall(async (data, context) => {
+    var _a;
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated.');
+    }
+    const deliveryId = String(data.deliveryId || '').trim();
+    if (!deliveryId) {
+        throw new functions.https.HttpsError('invalid-argument', 'deliveryId is required.');
+    }
+    const deliveryRef = db.collection('deliveries').doc(deliveryId);
+    const snap = await deliveryRef.get();
+    if (!snap.exists) {
+        throw new functions.https.HttpsError('not-found', 'Delivery not found.');
+    }
+    const deliveryData = snap.data() || {};
+    const callerUid = context.auth.uid;
+    const isCustomer = callerUid === deliveryData.userId || callerUid === deliveryData.senderId;
+    const callerDoc = await db.collection('users').doc(callerUid).get();
+    const role = (_a = callerDoc.data()) === null || _a === void 0 ? void 0 : _a.role;
+    const isPrivileged = role === 'admin' || role === 'super_admin' || role === 'dispatcher';
+    if (!isCustomer && !isPrivileged) {
+        throw new functions.https.HttpsError('permission-denied', 'Only the delivery owner can view the handover code.');
+    }
+    // Reuse the active code when one exists, otherwise issue (and rotate) a new one.
+    let code;
+    let expiresAt;
+    const active = await (0, handoverOtpService_1.getActiveHandoverOtp)(deliveryId);
+    if (active) {
+        code = active.code;
+        expiresAt = active.expiresAt;
+    }
+    else {
+        const issued = await (0, handoverOtpService_1.issueHandoverOtp)(deliveryId);
+        code = issued.code;
+        expiresAt = issued.expiresAt;
+    }
+    // Deliver the fresh code through the branded email as well.
+    const to = deliveryData.recipientEmail || deliveryData.senderEmail || deliveryData.customerEmail || deliveryData.email;
+    if (isValidEmail(to)) {
+        try {
+            const html = (0, emailTemplates_1.renderDeliveryHandoverOtpEmail)({
+                trackingNumber: deliveryData.trackingNumber || deliveryId.slice(0, 8).toUpperCase(),
+                recipientName: deliveryData.recipientName || deliveryData.receiverName || 'Valued Recipient',
+                pickupAddress: deliveryData.pickupAddress || 'Dispatch Hub',
+                dropoffAddress: deliveryData.dropoffAddress || deliveryData.deliveryAddress || 'Designated Destination',
+                handoverOtp: code,
+            });
+            await (0, emailTransporter_1.sendEmail)({
+                to,
+                subject: `ESDispatch Handover Code for Shipment #${deliveryData.trackingNumber || deliveryId.slice(0, 8).toUpperCase()}`,
+                html,
+            });
+        }
+        catch (err) {
+            console.warn('[getDeliveryOtp] Email delivery failed (code still returned in-app):', err);
+        }
+    }
+    return {
+        success: true,
+        code,
+        expiresAt: expiresAt.toISOString(),
+    };
 });
 /**
  * Callable function to submit Proof of Delivery and complete shipment.
@@ -729,43 +829,86 @@ exports.processVendorPayout = functions.https.onCall(async (data, context) => {
     }
 });
 /**
- * Cloud Function triggered when a document in the root 'riders' collection is changed.
+ * Callable Function: submits a rider application for the calling user.
+ *
+ * Security (C2 remediation): users can no longer self-promote to the rider
+ * role by writing documents. Becoming a fleet rider requires an application
+ * that an admin/dispatcher explicitly approves; only the approval trigger
+ * below grants the role and custom claims.
  */
-exports.onRiderDocumentChanged = functions.firestore
-    .document('riders/{riderId}')
-    .onWrite(async (change, context) => {
-    const riderId = context.params.riderId;
-    const afterData = change.after.data();
+exports.registerRiderApplication = functions.https.onCall(async (data, context) => {
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated.');
+    }
+    const callerUid = context.auth.uid;
+    const { fullName, phone, bikeNumber, vehicleType } = data || {};
+    const existing = await db.collection('rider_applications').doc(callerUid).get();
+    if (existing.exists) {
+        const existingData = existing.data() || {};
+        if (existingData.status === 'APPROVED') {
+            return { success: true, status: 'APPROVED', message: 'Your rider profile is already active.' };
+        }
+        if (existingData.status === 'PENDING') {
+            return { success: true, status: 'PENDING', message: 'Your application is already under review.' };
+        }
+    }
+    const userSnap = await db.collection('users').doc(callerUid).get();
+    const userData = userSnap.data() || {};
+    await db.collection('rider_applications').doc(callerUid).set({
+        uid: callerUid,
+        fullName: String(fullName || userData.fullName || userData.name || '').trim(),
+        email: userData.email || '',
+        phone: String(phone || userData.phone || '').trim(),
+        bikeNumber: String(bikeNumber || userData.bikeNumber || '').trim(),
+        vehicleType: String(vehicleType || '').trim(),
+        status: 'PENDING',
+        appliedAt: firestore_1.FieldValue.serverTimestamp(),
+    });
+    return { success: true, status: 'PENDING', message: 'Application submitted. Dispatch will review your fleet enrollment.' };
+});
+/**
+ * Trigger: grants the rider role and custom claims when an application is
+ * approved. Rider applications can only be updated by admins/dispatchers
+ * (enforced by security rules), so approval here is trustworthy.
+ */
+exports.onRiderApplicationApproved = functions.firestore
+    .document('rider_applications/{uid}')
+    .onUpdate(async (change, context) => {
+    const before = change.before.data() || {};
+    const after = change.after.data() || {};
+    if (before.status === 'APPROVED' || after.status !== 'APPROVED') {
+        return null;
+    }
+    const riderId = context.params.uid;
     try {
-        if (!change.after.exists)
-            return null;
-        const userRef = db.collection('users').doc(riderId);
         const updateData = {
             role: 'rider',
-            updatedAt: new Date().toISOString()
+            riderApproved: true,
+            updatedAt: new Date().toISOString(),
         };
-        if (afterData) {
-            if (afterData.name)
-                updateData.fullName = afterData.name;
-            if (afterData.phone)
-                updateData.phone = afterData.phone;
-            if (afterData.bikeNumber)
-                updateData.bikeNumber = afterData.bikeNumber;
-            if (afterData.status)
-                updateData.status = afterData.status;
-            if (typeof afterData.isOnline === 'boolean')
-                updateData.isOnline = afterData.isOnline;
-        }
-        await userRef.set(updateData, { merge: true });
+        if (after.fullName)
+            updateData.fullName = after.fullName;
+        if (after.phone)
+            updateData.phone = after.phone;
+        if (after.bikeNumber)
+            updateData.bikeNumber = after.bikeNumber;
+        await db.collection('users').doc(riderId).set(updateData, { merge: true });
+        await db.collection('rider_profiles').doc(riderId).set({
+            uid: riderId,
+            approved: true,
+            approvedAt: firestore_1.FieldValue.serverTimestamp(),
+            approvedBy: after.approvedBy || 'admin',
+        });
         try {
             await auth.setCustomUserClaims(riderId, { rider: true, customer: false });
         }
         catch (authError) {
-            console.warn(`[Rider Sync Trigger] Custom claim update skipped:`, authError);
+            console.warn(`[Rider Approval] Custom claim update skipped:`, authError);
         }
+        console.log(`[Rider Approval] User ${riderId} promoted to fleet rider.`);
     }
     catch (error) {
-        console.error(`[Rider Sync Trigger Error] Error syncing rider ${riderId}:`, error);
+        console.error(`[Rider Approval Error] ${riderId}:`, error);
     }
     return null;
 });
@@ -814,32 +957,11 @@ exports.onNotificationCreated = functions.firestore
     }
 });
 /**
- * Cloud Function triggered when a document in 'users/{userId}/riders/{riderId}' is written.
+ * Security (C2 remediation): writes to `users/{uid}/riders/*` must never
+ * promote a role. This trigger no longer exists as a promotion path — role
+ * grants now flow exclusively through `onRiderApplicationApproved`.
+ * The subcollection itself is denied by security rules (see firestore.rules).
  */
-exports.onRiderSubcollectionChanged = functions.firestore
-    .document('users/{userId}/riders/{riderId}')
-    .onWrite(async (change, context) => {
-    const userId = context.params.userId;
-    try {
-        if (!change.after.exists)
-            return null;
-        const userRef = db.collection('users').doc(userId);
-        await userRef.update({
-            role: 'rider',
-            updatedAt: new Date().toISOString()
-        });
-        try {
-            await auth.setCustomUserClaims(userId, { rider: true, customer: false });
-        }
-        catch (authError) {
-            console.warn(`[Rider Subcollection Sync] Custom claims warning:`, authError);
-        }
-    }
-    catch (err) {
-        console.error(`[Rider Subcollection Sync Error]`, err);
-    }
-    return null;
-});
 /**
  * Cloud Function triggered when a new contact submission is created.
  * Generates an admin notification automatically.
@@ -871,6 +993,8 @@ exports.onContactCreated = functions.firestore
 const emailTransporter_1 = require("./emails/emailTransporter");
 const emailTemplates_1 = require("./emails/emailTemplates");
 const otpService_1 = require("./emails/otpService");
+const handoverOtpService_1 = require("./emails/handoverOtpService");
+const emailOtpRateLimit = new Map();
 /**
  * Callable Function: Generates and dispatches a 6-digit OTP code to the user's email.
  */
@@ -878,12 +1002,28 @@ exports.sendEmailOtp = functions.https.onCall(async (data, context) => {
     const email = (data.email || '').trim().toLowerCase();
     const purpose = (data.purpose || 'SIGN_UP');
     const name = (data.name || 'Valued Client').trim();
-    const clientCode = String(data.code || '').trim();
     if (!email || !email.includes('@')) {
         throw new functions.https.HttpsError('invalid-argument', 'A valid email address is required.');
     }
+    // Per-IP throttling (in addition to the per-email cooldown enforced in
+    // otpService) so the endpoint cannot be used as a mail-bomb.
+    const rawRequest = context.rawRequest;
+    const ip = (rawRequest && rawRequest.ip) ||
+        (rawRequest && rawRequest.headers && rawRequest.headers['x-forwarded-for']) ||
+        'unknown';
+    const ipKey = `ip:${ip}`;
+    const now = Date.now();
+    const recent = (emailOtpRateLimit.get(ipKey) || []).filter((ts) => now - ts < 5 * 60 * 1000);
+    if (recent.length >= 5) {
+        throw new functions.https.HttpsError('resource-exhausted', 'Too many code requests. Please wait a few minutes.');
+    }
+    recent.push(now);
+    emailOtpRateLimit.set(ipKey, recent);
+    if (emailOtpRateLimit.size > 5000) {
+        emailOtpRateLimit.clear();
+    }
     try {
-        const { code, expiresAt } = await (0, otpService_1.createAndStoreOtp)(email, purpose, 10, /^\d{6}$/.test(clientCode) ? clientCode : undefined);
+        const { code, expiresAt } = await (0, otpService_1.createAndStoreOtp)(email, purpose, 10);
         let subject = 'ESDispatch Authentication Passcode';
         let html = '';
         switch (purpose) {
@@ -965,6 +1105,15 @@ exports.verifyEmailOtp = functions.https.onCall(async (data, context) => {
  * Callable Function: Diagnostic tool for Admin to verify SMTP connection.
  */
 exports.testSmtpConnection = functions.https.onCall(async (data, context) => {
+    var _a;
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
+    }
+    const callerDoc = await db.collection('users').doc(context.auth.uid).get();
+    const role = (_a = callerDoc.data()) === null || _a === void 0 ? void 0 : _a.role;
+    if (role !== 'admin' && role !== 'super_admin') {
+        throw new functions.https.HttpsError('permission-denied', 'Only administrators can test SMTP connectivity.');
+    }
     try {
         const { transporter, config } = await (0, emailTransporter_1.getTransporter)();
         await transporter.verify();
@@ -1161,23 +1310,27 @@ exports.onDeliveryStatusEmailTrigger = functions.firestore
         return null;
     }
     // 1. Handover Code Alert on Arrival / Out for Delivery
-    const handoverCode = after.deliveryCode || after.otpCode || after.handoverOtp || after.securityCode;
+    // The code is minted server-side on transition — the delivery document
+    // only ever holds a salted hash, never the plaintext code.
     const to = after.recipientEmail || after.senderEmail || after.customerEmail || after.email;
-    if ((becameArrived || becameOutForDelivery) && isValidEmail(to) && handoverCode) {
+    if (becameArrived || becameOutForDelivery) {
         try {
-            const html = (0, emailTemplates_1.renderDeliveryHandoverOtpEmail)({
-                trackingNumber: after.trackingNumber || context.params.deliveryId.slice(0, 8).toUpperCase(),
-                recipientName: after.recipientName || 'Valued Recipient',
-                pickupAddress: after.pickupAddress || 'Dispatch Hub',
-                dropoffAddress: after.dropoffAddress || 'Designated Destination',
-                handoverOtp: handoverCode,
-            });
-            await (0, emailTransporter_1.sendEmail)({
-                to,
-                subject: `ESDispatch Handover Code for Shipment #${after.trackingNumber || context.params.deliveryId.slice(0, 8).toUpperCase()}`,
-                html,
-            });
-            console.log(`[Handover Code Email] Sent to ${to}`);
+            const { code: handoverCode } = await (0, handoverOtpService_1.issueHandoverOtp)(context.params.deliveryId);
+            if (isValidEmail(to)) {
+                const html = (0, emailTemplates_1.renderDeliveryHandoverOtpEmail)({
+                    trackingNumber: after.trackingNumber || context.params.deliveryId.slice(0, 8).toUpperCase(),
+                    recipientName: after.recipientName || after.receiverName || 'Valued Recipient',
+                    pickupAddress: after.pickupAddress || 'Dispatch Hub',
+                    dropoffAddress: after.dropoffAddress || after.deliveryAddress || 'Designated Destination',
+                    handoverOtp: handoverCode,
+                });
+                await (0, emailTransporter_1.sendEmail)({
+                    to,
+                    subject: `ESDispatch Handover Code for Shipment #${after.trackingNumber || context.params.deliveryId.slice(0, 8).toUpperCase()}`,
+                    html,
+                });
+                console.log(`[Handover Code Email] Sent to ${to}`);
+            }
         }
         catch (err) {
             console.error('[Handover Code Email Error]', err);
@@ -1391,5 +1544,566 @@ exports.paystackWebhook = functions.https.onRequest(async (req, res) => {
         }
     }
     res.status(200).json({ status: 'success' });
+});
+// ============================================================================
+// SERVER-AUTHORITATIVE BOOKING & WALLET ENGINE (C1/C11 remediation)
+// ============================================================================
+const MAX_BOOKING_AMOUNT = 2500000; // ₦2.5M cap per booking
+const MAX_TIP_AMOUNT = 500000; // ₦500K cap per tip
+function clampAmount(value) {
+    const num = Number(value) || 0;
+    if (!isFinite(num))
+        return 0;
+    return Math.min(Math.max(num, 0), MAX_BOOKING_AMOUNT);
+}
+/**
+ * Callable Function: creates one (or a batch of) delivery booking(s) and
+ * debits the caller's wallet atomically on the server.
+ *
+ * The client can no longer self-author "PAID" bookings: the wallet debit,
+ * the `paymentRef`, and the `system_ledger` entry are all produced here with
+ * the Admin SDK, which is what the escrow settlement trigger requires before
+ * it will pay a rider.
+ */
+exports.createBooking = functions.https.onCall(async (data, context) => {
+    var _a, _b;
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated.');
+    }
+    const uid = context.auth.uid;
+    const stops = Array.isArray(data.stops) ? data.stops.filter(Boolean) : null;
+    const first = stops && stops.length > 0 ? stops[0] : data;
+    if (!first) {
+        throw new functions.https.HttpsError('invalid-argument', 'Booking details are required.');
+    }
+    const rawTip = Number(first.tipAmount) || 0;
+    const tipAmount = Math.min(Math.max(rawTip, 0), MAX_TIP_AMOUNT);
+    const totalCharge = stops
+        ? Math.min(Math.max(Number(data.totalCost) || 0, 0), MAX_BOOKING_AMOUNT)
+        : clampAmount((_b = (_a = first.price) !== null && _a !== void 0 ? _a : first.deliveryFee) !== null && _b !== void 0 ? _b : first.totalCost) + tipAmount;
+    if (totalCharge <= 0) {
+        throw new functions.https.HttpsError('invalid-argument', 'Booking amount must be greater than zero.');
+    }
+    const userRef = db.collection('users').doc(uid);
+    const ledgerRef = db.collection('system_ledger').doc();
+    const paymentRef = `PAY-${ledgerRef.id}`;
+    const batchId = String(data.batchId || '').trim();
+    // Server-forced protected keys: client payloads can never smuggle payment,
+    // settlement, or OTP fields into the delivery document.
+    const PROTECTED_KEYS = [
+        'otpCode', 'otpHash', 'otpAttempts', 'otpExpiresAt', 'otpIssuedAt',
+        'handoverCode', 'securityCode', 'payoutCredited', 'settlementStatus',
+        'settlementBlockReason', 'paymentRef', 'settlementApproved',
+    ];
+    const sanitizeStop = (stop) => {
+        const clean = {};
+        for (const [k, v] of Object.entries(stop || {})) {
+            if (!PROTECTED_KEYS.includes(k)) {
+                clean[k] = v;
+            }
+        }
+        return clean;
+    };
+    // Pre-allocate delivery document references before the transaction.
+    const stopRefs = (stops || [first]).map(() => db.collection('deliveries').doc());
+    try {
+        const result = await db.runTransaction(async (txn) => {
+            var _a;
+            const userSnap = await txn.get(userRef);
+            if (!userSnap.exists) {
+                throw new functions.https.HttpsError('not-found', 'Account profile not found.');
+            }
+            const balance = Number((_a = userSnap.data()) === null || _a === void 0 ? void 0 : _a.walletBalance) || 0;
+            if (balance < totalCharge) {
+                throw new functions.https.HttpsError('failed-precondition', 'Insufficient wallet balance. Please top up to complete this booking.');
+            }
+            const newBalance = balance - totalCharge;
+            txn.update(userRef, {
+                walletBalance: newBalance,
+                updatedAt: firestore_1.FieldValue.serverTimestamp(),
+            });
+            txn.set(ledgerRef, {
+                reference: paymentRef,
+                userId: uid,
+                amount: totalCharge,
+                currency: 'NGN',
+                gateway: 'WALLET',
+                type: 'BOOKING_PAYMENT',
+                status: 'COMPLETED',
+                createdAt: firestore_1.FieldValue.serverTimestamp(),
+            });
+            txn.set(userRef.collection('transactions').doc(paymentRef), {
+                id: paymentRef,
+                userId: uid,
+                title: stops ? `Batch Booking (${stopRefs.length} stops)` : 'Delivery Booking',
+                amount: -totalCharge,
+                isTopUp: false,
+                type: 'DEBIT',
+                status: 'SUCCESS',
+                reference: paymentRef,
+                date: new Date().toLocaleDateString('en-GB'),
+                timestamp: Date.now(),
+                createdAt: firestore_1.FieldValue.serverTimestamp(),
+            });
+            const source = stops || [first];
+            const deliveryIds = [];
+            source.forEach((stop, index) => {
+                var _a, _b, _c;
+                const deliveryRef = stopRefs[index];
+                const stopFee = stops ? clampAmount((_a = stop.price) !== null && _a !== void 0 ? _a : stop.deliveryFee) : clampAmount((_c = (_b = first.price) !== null && _b !== void 0 ? _b : first.deliveryFee) !== null && _c !== void 0 ? _c : first.totalCost);
+                deliveryIds.push(deliveryRef.id);
+                txn.set(deliveryRef, Object.assign(Object.assign({}, sanitizeStop(stop)), { 
+                    // Server-forced authoritative fields (cannot be overridden)
+                    userId: uid, senderId: uid, status: 'PENDING', paymentStatus: 'PAID', paymentMethod: 'WALLET', paymentRef, price: stopFee, deliveryFee: stopFee, tipAmount: stops ? (Number(stop.tipAmount) || 0) : tipAmount, riderId: '', driverId: '', payoutCredited: false, settlementStatus: 'UNSETTLED', batchId: batchId || (stops ? deliveryRef.id : ''), bookingSource: 'mobile-app', createdAt: firestore_1.FieldValue.serverTimestamp(), dateString: new Date().toLocaleDateString('en-GB') }));
+            });
+            return { newBalance, paymentRef, deliveryIds };
+        });
+        return {
+            success: true,
+            message: stops ? 'Batch booking confirmed.' : 'Booking confirmed.',
+            newBalance: result.newBalance,
+            paymentRef: result.paymentRef,
+            deliveryIds: result.deliveryIds,
+        };
+    }
+    catch (error) {
+        console.error('[createBooking Error]', error);
+        if (error instanceof functions.https.HttpsError)
+            throw error;
+        throw new functions.https.HttpsError('internal', error.message || 'Failed to create booking.');
+    }
+});
+/**
+ * Callable Function: submits a wallet withdrawal request and debits the
+ * wallet atomically on the server. The request lands in a review queue for
+ * admin payout.
+ */
+exports.requestWalletWithdrawal = functions.https.onCall(async (data, context) => {
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated.');
+    }
+    const uid = context.auth.uid;
+    const amount = Number(data.amount);
+    if (!isFinite(amount) || amount <= 0) {
+        throw new functions.https.HttpsError('invalid-argument', 'A valid withdrawal amount is required.');
+    }
+    const userRef = db.collection('users').doc(uid);
+    const requestRef = db.collection('withdrawal_requests').doc();
+    try {
+        const newBalance = await db.runTransaction(async (txn) => {
+            var _a;
+            const userSnap = await txn.get(userRef);
+            if (!userSnap.exists) {
+                throw new functions.https.HttpsError('not-found', 'Account profile not found.');
+            }
+            const balance = Number((_a = userSnap.data()) === null || _a === void 0 ? void 0 : _a.walletBalance) || 0;
+            if (balance < amount) {
+                throw new functions.https.HttpsError('failed-precondition', 'Insufficient wallet balance.');
+            }
+            const updated = balance - amount;
+            txn.update(userRef, {
+                walletBalance: updated,
+                updatedAt: firestore_1.FieldValue.serverTimestamp(),
+            });
+            txn.set(requestRef, {
+                id: requestRef.id,
+                userId: uid,
+                amount,
+                currency: 'NGN',
+                status: 'PENDING',
+                accountName: String(data.accountName || '').trim(),
+                bankName: String(data.bankName || '').trim(),
+                accountNumber: String(data.accountNumber || '').trim(),
+                requestedAt: firestore_1.FieldValue.serverTimestamp(),
+            });
+            txn.set(userRef.collection('transactions').doc(`WDR-${requestRef.id}`), {
+                id: `WDR-${requestRef.id}`,
+                userId: uid,
+                title: 'Withdrawal Request',
+                amount: -amount,
+                isTopUp: false,
+                type: 'DEBIT',
+                status: 'PENDING',
+                reference: `WDR-${requestRef.id}`,
+                date: new Date().toLocaleDateString('en-GB'),
+                timestamp: Date.now(),
+                createdAt: firestore_1.FieldValue.serverTimestamp(),
+            });
+            return updated;
+        });
+        return {
+            success: true,
+            message: 'Withdrawal request submitted for review.',
+            newBalance,
+            requestId: requestRef.id,
+        };
+    }
+    catch (error) {
+        console.error('[requestWalletWithdrawal Error]', error);
+        if (error instanceof functions.https.HttpsError)
+            throw error;
+        throw new functions.https.HttpsError('internal', error.message || 'Failed to submit withdrawal request.');
+    }
+});
+/**
+ * Callable Function: server-authoritative marketplace checkout.
+ *
+ * The client can no longer self-author PAID marketplace orders: stock
+ * decrements, wallet debits, vendor splits, the order document, the delivery
+ * document and the payment ledger are all produced here with the Admin SDK.
+ * Card payments are verified against Paystack before anything is written.
+ */
+exports.createMarketplaceBooking = functions.https.onCall(async (data, context) => {
+    var _a, _b, _c, _d, _e;
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated.');
+    }
+    const uid = context.auth.uid;
+    const items = Array.isArray(data.items) ? data.items.filter(Boolean) : [];
+    if (items.length === 0) {
+        throw new functions.https.HttpsError('invalid-argument', 'Your cart is empty.');
+    }
+    const shippingAddress = String(data.shippingAddress || '').trim();
+    const paymentMethod = String(data.paymentMethod || 'Wallet');
+    const paystackReference = String(data.paystackReference || '').trim();
+    const isWallet = paymentMethod === 'Wallet';
+    const redeemPoints = Boolean(data.redeemPoints);
+    const pointsDiscount = Math.min(Math.max(Number(data.pointsDiscount) || 0, 0), MAX_BOOKING_AMOUNT);
+    const pointsToRedeem = Math.min(Math.max(Number(data.pointsToRedeem) || 0, 0), 100000000);
+    const deliveryFee = Math.min(Math.max(Number(data.deliveryFee) || 1500, 0), MAX_BOOKING_AMOUNT);
+    if (!isWallet && !paystackReference) {
+        throw new functions.https.HttpsError('invalid-argument', 'Payment reference is required for card payments.');
+    }
+    // --- Fresh stock & price verification from live product documents ---
+    const perItem = [];
+    let subtotal = 0;
+    for (const item of items) {
+        const productId = String(item.productId || '').trim();
+        const qty = Math.max(1, Math.floor(Number(item.quantity) || 1));
+        if (!productId) {
+            throw new functions.https.HttpsError('invalid-argument', 'A product in your cart is invalid.');
+        }
+        const productRef = db.collection('marketplace_products').doc(productId);
+        const snap = await productRef.get();
+        if (!snap.exists) {
+            throw new functions.https.HttpsError('not-found', 'One of your items is no longer available. Please refresh your cart.');
+        }
+        const pd = snap.data() || {};
+        const price = Number(pd.price) || 0;
+        const stock = Number((_b = (_a = pd.stock) !== null && _a !== void 0 ? _a : pd.stockQuantity) !== null && _b !== void 0 ? _b : 0);
+        if (price <= 0) {
+            throw new functions.https.HttpsError('invalid-argument', 'A product in your cart has an invalid price.');
+        }
+        if (stock < qty) {
+            throw new functions.https.HttpsError('failed-precondition', `Only ${stock} left in stock for ${pd.name || pd.title || 'an item'}.`);
+        }
+        subtotal += price * qty;
+        perItem.push({
+            ref: productRef,
+            productId,
+            title: String(pd.name || pd.title || 'Product'),
+            vendorId: String(pd.vendorId || ''),
+            vendorStore: String(pd.vendorStore || ''),
+            qty,
+            price,
+        });
+    }
+    // --- Per-vendor commission splits from live store documents ---
+    const splitMap = new Map();
+    for (const item of perItem) {
+        const key = item.vendorId || item.vendorStore || 'ESDispatch';
+        if (!splitMap.has(key)) {
+            let storeId = '';
+            let rate = 8.5;
+            if (item.vendorId) {
+                const storeSnap = await db.collection('marketplace_stores').doc(item.vendorId).get();
+                if (storeSnap.exists) {
+                    storeId = storeSnap.id;
+                    rate = Number((storeSnap.data() || {}).commissionRate) || 8.5;
+                }
+            }
+            splitMap.set(key, { storeId, storeName: item.vendorStore || 'ESDispatch Vendor', rate, subtotal: 0 });
+        }
+        const entry = splitMap.get(key);
+        entry.subtotal += item.price * item.qty;
+    }
+    const vendorSplits = Array.from(splitMap.values()).map((s) => ({
+        storeId: s.storeId,
+        storeName: s.storeName,
+        subtotal: s.subtotal,
+        commissionRate: s.rate,
+        commissionAmount: s.subtotal * (s.rate / 100.0),
+        vendorPayout: s.subtotal * (1 - s.rate / 100.0),
+    }));
+    const grandTotal = Math.max(subtotal + deliveryFee - (redeemPoints ? pointsDiscount : 0), 0);
+    if (grandTotal <= 0 && !(redeemPoints && pointsDiscount >= subtotal + deliveryFee)) {
+        throw new functions.https.HttpsError('invalid-argument', 'Order total must be greater than zero.');
+    }
+    // --- Payment verification ---
+    if (!isWallet) {
+        const paystackSecret = process.env.PAYSTACK_SECRET_KEY || ((_c = functions.config().paystack) === null || _c === void 0 ? void 0 : _c.secret);
+        if (paystackReference.startsWith('TEST_MOCK_') && process.env.NODE_ENV === 'production') {
+            throw new functions.https.HttpsError('failed-precondition', 'Mock payments are strictly disallowed in production.');
+        }
+        if (paystackSecret && !paystackReference.startsWith('TEST_MOCK_')) {
+            try {
+                const response = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(paystackReference)}`, {
+                    method: 'GET',
+                    headers: { Authorization: `Bearer ${paystackSecret}`, 'Content-Type': 'application/json' },
+                });
+                const resJson = await response.json();
+                if (!resJson.status || ((_d = resJson.data) === null || _d === void 0 ? void 0 : _d.status) !== 'success') {
+                    throw new functions.https.HttpsError('permission-denied', `Payment verification failed: ${resJson.message || 'Unsuccessful'}`);
+                }
+                const verifiedAmountNaira = (Number((_e = resJson.data) === null || _e === void 0 ? void 0 : _e.amount) || 0) / 100;
+                if (Math.abs(verifiedAmountNaira - grandTotal) > 0.05) {
+                    throw new functions.https.HttpsError('invalid-argument', `Amount mismatch: Gateway received ₦${verifiedAmountNaira}, but the order total is ₦${grandTotal}`);
+                }
+            }
+            catch (err) {
+                console.error('[Marketplace Paystack Verify Error]', err);
+                if (err instanceof functions.https.HttpsError)
+                    throw err;
+                throw new functions.https.HttpsError('internal', 'Error contacting payment gateway.');
+            }
+        }
+    }
+    const userRef = db.collection('users').doc(uid);
+    const orderRef = db.collection('marketplace_orders').doc();
+    const ledgerRef = db.collection('system_ledger').doc();
+    const paymentRef = `PAY-${ledgerRef.id}`;
+    const deliveryId = orderRef.id;
+    try {
+        const result = await db.runTransaction(async (txn) => {
+            var _a, _b, _c, _d, _e, _f, _g, _h;
+            // Re-check stock inside the transaction
+            for (const item of perItem) {
+                const snap = await txn.get(item.ref);
+                const remaining = Number((_b = (_a = (snap.data() || {}).stock) !== null && _a !== void 0 ? _a : (snap.data() || {}).stockQuantity) !== null && _b !== void 0 ? _b : 0);
+                if (remaining < item.qty) {
+                    throw new functions.https.HttpsError('failed-precondition', `Insufficient stock for ${item.title}.`);
+                }
+            }
+            let newBalance = null;
+            const userSnap = await txn.get(userRef);
+            if (!userSnap.exists) {
+                throw new functions.https.HttpsError('not-found', 'Account profile not found.');
+            }
+            const balance = Number((_c = userSnap.data()) === null || _c === void 0 ? void 0 : _c.walletBalance) || 0;
+            const loyalty = Number((_d = userSnap.data()) === null || _d === void 0 ? void 0 : _d.loyaltyPoints) || 0;
+            const updates = {};
+            if (isWallet) {
+                if (balance < grandTotal) {
+                    throw new functions.https.HttpsError('failed-precondition', 'Insufficient wallet balance.');
+                }
+                updates.walletBalance = balance - grandTotal;
+                newBalance = balance - grandTotal;
+            }
+            if (redeemPoints && pointsDiscount > 0) {
+                const cost = Math.min(pointsToRedeem, loyalty);
+                updates.loyaltyPoints = Math.max(loyalty - cost, 0);
+            }
+            if (Object.keys(updates).length > 0) {
+                updates.updatedAt = firestore_1.FieldValue.serverTimestamp();
+                txn.update(userRef, updates);
+            }
+            for (const item of perItem) {
+                txn.update(item.ref, { stock: firestore_1.FieldValue.increment(-item.qty) });
+            }
+            txn.set(ledgerRef, {
+                reference: paymentRef,
+                userId: uid,
+                amount: grandTotal,
+                currency: 'NGN',
+                gateway: isWallet ? 'WALLET' : 'PAYSTACK',
+                type: 'MARKETPLACE_ORDER',
+                status: 'COMPLETED',
+                createdAt: firestore_1.FieldValue.serverTimestamp(),
+            });
+            txn.set(orderRef, {
+                orderId: deliveryId,
+                userId: uid,
+                shippingAddress,
+                paymentMethod: isWallet ? 'Wallet' : 'Paystack',
+                paystackReference: paystackReference || '',
+                status: 'PAID',
+                paymentRef,
+                subtotal,
+                deliveryFee,
+                pointsDiscount,
+                pointsRedeemed: redeemPoints && pointsDiscount > 0,
+                totalAmount: grandTotal,
+                vendorSplits,
+                items: perItem.map((i) => ({
+                    productId: i.productId,
+                    title: i.title,
+                    price: i.price,
+                    quantity: i.qty,
+                    vendorId: i.vendorId,
+                    vendorStore: i.vendorStore,
+                })),
+                createdAt: firestore_1.FieldValue.serverTimestamp(),
+            });
+            txn.set(db.collection('deliveries').doc(deliveryId), {
+                id: deliveryId,
+                itemName: perItem.map((i) => i.title).join(', '),
+                status: 'PENDING',
+                pickupAddress: `${((_e = vendorSplits[0]) === null || _e === void 0 ? void 0 : _e.storeName) || 'ESDispatch Vendor'} - Vendor Fulfilment Point`,
+                deliveryAddress: shippingAddress,
+                senderName: ((_f = vendorSplits[0]) === null || _f === void 0 ? void 0 : _f.storeName) || 'ESDispatch Vendor',
+                receiverName: ((_g = userSnap.data()) === null || _g === void 0 ? void 0 : _g.name) || 'Valued Customer',
+                receiverPhone: ((_h = userSnap.data()) === null || _h === void 0 ? void 0 : _h.phone) || '',
+                price: grandTotal,
+                deliveryFee,
+                type: 'MARKETPLACE',
+                userId: uid,
+                senderId: uid,
+                riderId: '',
+                driverId: '',
+                paymentStatus: 'PAID',
+                paymentMethod: isWallet ? 'WALLET' : 'PAYSTACK',
+                paymentRef,
+                payoutCredited: false,
+                settlementStatus: 'UNSETTLED',
+                marketplaceOrderId: deliveryId,
+                bookingSource: 'marketplace',
+                createdAt: firestore_1.FieldValue.serverTimestamp(),
+                dateString: new Date().toLocaleDateString('en-GB'),
+            });
+            txn.set(userRef.collection('transactions').doc(paymentRef), {
+                id: paymentRef,
+                userId: uid,
+                title: `Marketplace Order (${perItem.length} items)`,
+                amount: -grandTotal,
+                isTopUp: false,
+                type: 'DEBIT',
+                status: 'SUCCESS',
+                reference: paymentRef,
+                date: new Date().toLocaleDateString('en-GB'),
+                timestamp: Date.now(),
+                createdAt: firestore_1.FieldValue.serverTimestamp(),
+            });
+            return { newBalance };
+        });
+        // Vendor notifications (server-side, since inbox creation is restricted)
+        const storeIds = vendorSplits.map((s) => s.storeId).filter(Boolean);
+        for (const storeId of storeIds) {
+            const notifRef = db.collection('users').doc(storeId).collection('notifications').doc();
+            await notifRef.set({
+                id: notifRef.id,
+                title: 'New Marketplace Order!',
+                message: `You have a new paid order #${deliveryId}. Prepare and dispatch it now to keep earning!`,
+                parcelId: deliveryId,
+                isRead: false,
+                createdAt: firestore_1.FieldValue.serverTimestamp(),
+            }).catch((err) => console.warn('[Marketplace Vendor Notif Error]', err));
+        }
+        return {
+            success: true,
+            message: 'Order placed successfully.',
+            orderId: deliveryId,
+            paymentRef,
+            newBalance: result.newBalance,
+            amountCharged: grandTotal,
+            vendorStoreIds: storeIds,
+        };
+    }
+    catch (error) {
+        console.error('[createMarketplaceBooking Error]', error);
+        if (error instanceof functions.https.HttpsError)
+            throw error;
+        throw new functions.https.HttpsError('internal', error.message || 'Failed to complete marketplace checkout.');
+    }
+});
+/**
+ * Callable Function: server-authoritative cancellation & refund.
+ * Validates the caller owns the delivery and the status is cancellable, then
+ * atomically marks it CANCELLED and refunds the wallet (dispatch fee retained
+ * when a rider was already assigned). Unpaid drafts cancel without refund.
+ */
+exports.cancelDelivery = functions.https.onCall(async (data, context) => {
+    var _a;
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated.');
+    }
+    const deliveryId = String(data.deliveryId || '').trim();
+    if (!deliveryId) {
+        throw new functions.https.HttpsError('invalid-argument', 'deliveryId is required.');
+    }
+    const deliveryRef = db.collection('deliveries').doc(deliveryId);
+    const snap = await deliveryRef.get();
+    if (!snap.exists) {
+        throw new functions.https.HttpsError('not-found', 'Delivery not found.');
+    }
+    const d = snap.data() || {};
+    const uid = context.auth.uid;
+    const callerDoc = await db.collection('users').doc(uid).get();
+    const role = (_a = callerDoc.data()) === null || _a === void 0 ? void 0 : _a.role;
+    const isPrivileged = role === 'admin' || role === 'super_admin' || role === 'dispatcher';
+    const isOwner = d.userId === uid || d.senderId === uid;
+    if (!isOwner && !isPrivileged) {
+        throw new functions.https.HttpsError('permission-denied', 'Only the delivery owner can cancel this shipment.');
+    }
+    const status = String(d.status || '').toUpperCase();
+    const cancellable = [
+        'PENDING', 'QUEUED', 'OFFERED', 'AVAILABLE', 'UNASSIGNED',
+        'ASSIGNED_TO_POOL', 'ASSIGNED', 'RESERVED_NEXT', 'BOOKED',
+    ];
+    if (!cancellable.includes(status)) {
+        throw new functions.https.HttpsError('failed-precondition', 'This shipment can no longer be cancelled.');
+    }
+    const price = Math.min(Math.max(Number(d.price) || 0, 0), MAX_BOOKING_AMOUNT);
+    const fee = status === 'ASSIGNED' || status === 'RESERVED_NEXT' ? Math.min(500, price) : 0;
+    const isPaid = String(d.paymentStatus || '').toUpperCase() === 'PAID';
+    const refundAmount = isPaid ? Math.max(price - fee, 0) : 0;
+    const ownerId = String(d.userId || uid);
+    let newBalance = null;
+    await db.runTransaction(async (txn) => {
+        var _a;
+        await txn.update(deliveryRef, {
+            status: 'CANCELLED',
+            cancellationReason: String(data.reason || 'Customer request'),
+            cancelledAt: firestore_1.FieldValue.serverTimestamp(),
+            deductedFee: fee,
+            refundedAmount: refundAmount,
+        });
+        if (refundAmount > 0) {
+            const userRef = db.collection('users').doc(ownerId);
+            const uSnap = await txn.get(userRef);
+            const bal = Number((_a = uSnap.data()) === null || _a === void 0 ? void 0 : _a.walletBalance) || 0;
+            newBalance = bal + refundAmount;
+            txn.update(userRef, { walletBalance: newBalance, updatedAt: firestore_1.FieldValue.serverTimestamp() });
+            const ref = `REF-${deliveryId}`;
+            txn.set(db.collection('system_ledger').doc(ref), {
+                reference: ref,
+                userId: ownerId,
+                amount: refundAmount,
+                currency: 'NGN',
+                gateway: 'WALLET',
+                type: 'CANCELLATION_REFUND',
+                status: 'COMPLETED',
+                createdAt: firestore_1.FieldValue.serverTimestamp(),
+            });
+            txn.set(userRef.collection('transactions').doc(ref), {
+                id: ref,
+                userId: ownerId,
+                title: 'Order Cancellation Refund',
+                amount: refundAmount,
+                isTopUp: true,
+                type: 'CREDIT',
+                status: 'SUCCESS',
+                reference: ref,
+                date: new Date().toLocaleDateString('en-GB'),
+                timestamp: Date.now(),
+                createdAt: firestore_1.FieldValue.serverTimestamp(),
+            });
+        }
+    });
+    return {
+        success: true,
+        refund: refundAmount,
+        deductedFee: fee,
+        newBalance,
+    };
 });
 //# sourceMappingURL=index.js.map

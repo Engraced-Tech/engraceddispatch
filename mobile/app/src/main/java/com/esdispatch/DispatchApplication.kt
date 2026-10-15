@@ -1,4 +1,4 @@
-package com.esdispatch
+﻿package com.esdispatch
 
 import android.app.Application
 import android.content.ContentValues
@@ -120,6 +120,9 @@ class DispatchApplication : Application() {
     }
 
     private fun saveCrashToFile(trace: String) {
+        // H4 remediation: crash traces are diagnostic-only. The log file is
+        // written in debug builds only; production never exposes stack traces.
+        if (!BuildConfig.DEBUG) return
         try {
             val extDir = getExternalFilesDir(null) ?: return
             extDir.mkdirs()

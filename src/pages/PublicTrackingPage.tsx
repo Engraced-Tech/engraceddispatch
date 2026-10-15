@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { db } from "@/lib/firebase";
 import { doc, onSnapshot } from "firebase/firestore";
@@ -115,26 +115,51 @@ export const PublicTrackingPage: React.FC = () => {
     setLoading(true);
     setNotFound(false);
 
-    const docRef = doc(db, "deliveries", trackingId);
+    // Security remediation (C3/C4): the public tracking page now reads the
+    // REDACTED `public_tracking` projection (publicly readable, no PII, no
+    // OTP) instead of the raw delivery document.
+    const trackingDocRef = doc(db, "public_tracking", trackingId);
+    let legacyUnsub: (() => void) | null = null;
+
     const unsubscribe = onSnapshot(
-      docRef,
+      trackingDocRef,
       (snap) => {
         if (snap.exists()) {
-          setDelivery({ id: snap.id, ...snap.data() } as DeliveryDetails);
+          const data = snap.data() as Record<string, any>;
+          setDelivery({
+            id: trackingId,
+            status: data.status || "PENDING",
+            progress: typeof data.progress === "number" ? data.progress : 0,
+            itemName: data.itemName || "",
+            pickupAddress: data.pickupAddress || "",
+            deliveryAddress: data.deliveryAddress || "",
+            courierName: data.courierName || "",
+            riderBikeNumber: data.riderBikeNumber || "",
+            courierLatitude: data.courierLatitude ?? null,
+            courierLongitude: data.courierLongitude ?? null,
+          } as DeliveryDetails);
           setLoading(false);
           setNotFound(false);
+          if (legacyUnsub) { legacyUnsub(); legacyUnsub = null; }
         } else {
-          // Fallback to parcels collection
-          const parcelRef = doc(db, "parcels", trackingId);
-          onSnapshot(parcelRef, (pSnap) => {
-            setLoading(false);
-            if (pSnap.exists()) {
-              setDelivery({ id: pSnap.id, ...pSnap.data() } as DeliveryDetails);
-              setNotFound(false);
-            } else {
+          // Legacy fallback: pre-projection documents still live in deliveries.
+          const docRef = doc(db, "deliveries", trackingId);
+          legacyUnsub = onSnapshot(
+            docRef,
+            (dSnap) => {
+              setLoading(false);
+              if (dSnap.exists()) {
+                setDelivery({ id: dSnap.id, ...dSnap.data() } as DeliveryDetails);
+                setNotFound(false);
+              } else {
+                setNotFound(true);
+              }
+            },
+            () => {
+              setLoading(false);
               setNotFound(true);
             }
-          });
+          );
         }
       },
       (err) => {
@@ -144,7 +169,10 @@ export const PublicTrackingPage: React.FC = () => {
       }
     );
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      if (legacyUnsub) legacyUnsub();
+    };
   }, [trackingId]);
 
   const getActiveStepIndex = (statusStr: string) => {
@@ -434,8 +462,8 @@ export const PublicTrackingPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Recipient OTP Handover Badge (Encrypted Security) */}
-            {delivery.otpCode && (
+            {/* Secure Handover Notice (codes are delivered via email/app) */}
+            {delivery.status && !["DELIVERED", "CANCELLED"].includes(String(delivery.status).toUpperCase()) && (
               <div className="bg-gradient-to-br from-[#181818] to-[#121212] border border-[#FFB800]/40 rounded-3xl p-6 sm:p-7 relative overflow-hidden shadow-2xl">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div className="flex items-start gap-4">
@@ -445,7 +473,7 @@ export const PublicTrackingPage: React.FC = () => {
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="text-[10px] font-black font-mono tracking-widest text-[#FFB800] uppercase">
-                          RECIPIENT HANDOVER VERIFICATION OTP
+                          RECIPIENT HANDOVER VERIFICATION
                         </span>
                         {delivery.otpVerified && (
                           <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-bold">
@@ -454,35 +482,12 @@ export const PublicTrackingPage: React.FC = () => {
                         )}
                       </div>
                       <h3 className="text-base font-black text-white mt-0.5">
-                        Encrypted Security Release Code
+                        Secure Handover Code
                       </h3>
                       <p className="text-xs text-neutral-400 mt-1 max-w-xl leading-relaxed">
-                        Share this 4-digit code with the courier upon physical parcel handover to confirm and release the delivery.
+                        The 4-digit handover code is sent to the sender's registered email and shown in the ESDispatch app when the courier arrives. Present it to the courier to release the parcel.
                       </p>
                     </div>
-                  </div>
-
-                  <div className="flex items-center gap-3 self-start sm:self-auto bg-black/60 border border-[#333] px-5 py-3 rounded-2xl">
-                    <div className="text-2xl sm:text-3xl font-mono font-black tracking-widest text-[#FFB800]">
-                      {delivery.otpCode}
-                    </div>
-                    <button
-                      onClick={() => handleCopyOtp(delivery.otpCode!)}
-                      className="h-10 px-3.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
-                      title="Copy OTP"
-                    >
-                      {copiedOtp ? (
-                        <>
-                          <Check className="w-4 h-4 text-emerald-400" />
-                          <span className="text-emerald-400">Copied</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-4 h-4" />
-                          <span>Copy</span>
-                        </>
-                      )}
-                    </button>
                   </div>
                 </div>
               </div>
@@ -697,6 +702,12 @@ export const PublicTrackingPage: React.FC = () => {
                   <div className="flex justify-between">
                     <span className="font-bold text-gray-600">Verification OTP:</span>
                     <span className="font-mono font-bold">{delivery.otpCode}</span>
+                  </div>
+                )}
+                {!delivery.otpCode && (
+                  <div className="flex justify-between">
+                    <span className="font-bold text-gray-600">Handover Code:</span>
+                    <span className="font-semibold">Sent to sender's email & app</span>
                   </div>
                 )}
                 {delivery.price && (

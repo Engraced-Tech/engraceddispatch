@@ -1,4 +1,4 @@
-import * as crypto from 'crypto';
+﻿import * as crypto from 'crypto';
 import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
 
 export type OtpPurpose =
@@ -8,14 +8,23 @@ export type OtpPurpose =
   | 'PIN_RESET'
   | 'DELIVERY_HANDOVER';
 
-const OTP_PEPPER = 'ESDISPATCH_OTP_SECURE_PEPPER_2026';
+const OTP_PEPPER = (process.env.OTP_PEPPER || 'ESDISPATCH_OTP_SECURE_PEPPER_2026').trim();
 const MAX_ATTEMPTS = 5;
 
 /**
- * Computes a SHA-256 hash of the 6-digit code with pepper.
+ * Computes an HMAC-SHA256 hash of the code with a server-side pepper.
  */
 function hashOtp(code: string): string {
   return crypto.createHmac('sha256', OTP_PEPPER).update(code.trim()).digest('hex');
+}
+
+function safeEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
 }
 
 export interface GeneratedOtpResult {
@@ -25,23 +34,19 @@ export interface GeneratedOtpResult {
 }
 
 /**
- * Records a 6-digit OTP in Firestore and returns it. When the caller supplies
- * a code (the app generates and verifies one source of truth), that code is
- * used; otherwise a cryptographically strong one is generated.
+ * Records a server-generated 6-digit OTP in Firestore and returns it.
+ * Codes are NEVER caller-supplied — the server is the single source of truth
+ * (remediation of audit finding C7).
  */
 export async function createAndStoreOtp(
   email: string,
   purpose: OtpPurpose,
-  expiryMinutes: number = 10,
-  providedCode?: string
+  expiryMinutes: number = 10
 ): Promise<GeneratedOtpResult> {
   const db = getFirestore();
   const normalizedEmail = email.toLowerCase().trim();
 
-  const trimmedProvided = (providedCode || '').trim();
-  const code = /^\d{6}$/.test(trimmedProvided)
-    ? trimmedProvided
-    : crypto.randomInt(100000, 1000000).toString();
+  const code = crypto.randomInt(100000, 1000000).toString();
   const hashedCode = hashOtp(code);
 
   const now = new Date();
@@ -118,7 +123,7 @@ export async function verifyOtpCode(
   }
 
   const inputHash = hashOtp(rawCode);
-  if (inputHash !== data.hashedCode) {
+  if (!safeEqual(inputHash, String(data.hashedCode))) {
     await otpRef.update({
       attempts: FieldValue.increment(1),
     });

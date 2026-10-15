@@ -217,6 +217,9 @@ class LocationService : Service() {
                 .addOnFailureListener { e ->
                     Log.w(TAG, "Non-fatal delivery telemetry update fallback: ${e.message}")
                 }
+            db.collection("parcels").document(pId)
+                .set(deliveryUpdate, com.google.firebase.firestore.SetOptions.merge())
+                .addOnFailureListener { _ -> }
         }
 
         // 3. Throttled sync to users/{userId} (at most once every 5 minutes) for offline dispatch matching

@@ -1,12 +1,19 @@
-import React from "react";
+﻿import React from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ArrowRight, AlertCircle, ShieldCheck } from "lucide-react";
+import { ArrowRight, ShieldCheck } from "lucide-react";
 
+/**
+ * Email verification landing page.
+ *
+ * Security remediation (audit findings C3/C7): verification codes are no
+ * longer transported in URL query parameters (browser history/referrer leak).
+ * The code is emailed securely and entered in the app, where verification
+ * happens server-side against the hashed record.
+ */
 export const EmailVerifiedPage: React.FC = () => {
   const [searchParams] = useSearchParams();
-  const otp = (searchParams.get("otp") || "").trim();
   const email = (searchParams.get("email") || "").trim();
-  const hasCode = otp.length > 0;
+  const hasEmail = email.length > 0;
 
   return (
     <div className="min-h-screen bg-[#0A0A0A] text-white font-sans flex flex-col selection:bg-[#FFB800] selection:text-black">
@@ -41,41 +48,36 @@ export const EmailVerifiedPage: React.FC = () => {
           <div className="bg-[#141414] border border-[#2E2E2E] rounded-3xl p-6 sm:p-9 shadow-2xl space-y-6">
             <div className="flex items-center gap-3.5">
               <div className="w-12 h-12 rounded-2xl bg-[#FFB800]/15 border border-[#FFB800]/30 flex items-center justify-center text-[#FFB800] shrink-0">
-                {hasCode ? <ShieldCheck className="w-6 h-6" /> : <AlertCircle className="w-6 h-6" />}
+                <ShieldCheck className="w-6 h-6" />
               </div>
               <div>
                 <div className="text-[10px] font-black font-mono tracking-widest text-[#FFB800] uppercase">
                   EMAIL VERIFICATION
                 </div>
                 <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-                  {hasCode ? "Verification code received" : "Verification link incomplete"}
+                  Verification code sent
                 </h1>
               </div>
             </div>
 
-            {hasCode ? (
-              <>
-                <div className="bg-black/60 border border-[#FFB800]/40 rounded-2xl px-4 py-6 sm:py-7 text-center">
-                  <div className="text-3xl sm:text-4xl font-mono font-black tracking-[0.28em] text-[#FFB800] break-all">
-                    {otp}
-                  </div>
-                </div>
+            <div className="bg-black/60 border border-[#FFB800]/40 rounded-2xl px-4 py-6 sm:py-7 text-center">
+              <div className="text-sm font-bold text-neutral-200">
+                Your confidential verification passcode has been dispatched.
+              </div>
+              <div className="text-xs text-neutral-400 mt-2">
+                Open the ESDispatch app and enter the code from the email to finish verifying your account.
+              </div>
+            </div>
 
-                <p className="text-xs sm:text-sm text-neutral-400 leading-relaxed">
-                  Enter this code in the ESDispatch app to finish verifying your address. The code
-                  expires shortly.
-                </p>
+            <p className="text-xs sm:text-sm text-neutral-400 leading-relaxed">
+              The code expires shortly and can only be used once. ESDispatch support staff and
+              riders will never ask you for your verification code.
+            </p>
 
-                {email && (
-                  <div className="text-[11px] font-mono text-neutral-500 break-all">
-                    Sent to <span className="text-neutral-300">{email}</span>
-                  </div>
-                )}
-              </>
-            ) : (
-              <p className="text-xs sm:text-sm text-neutral-400 leading-relaxed">
-                This verification link is incomplete — open the app and request a new code.
-              </p>
+            {hasEmail && (
+              <div className="text-[11px] font-mono text-neutral-500 break-all">
+                Sent to <span className="text-neutral-300">{email}</span>
+              </div>
             )}
 
             <div className="pt-1">

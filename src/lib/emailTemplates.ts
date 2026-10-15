@@ -1,4 +1,4 @@
-/**
+﻿/**
  * ESDISPATCH LUXURY EMAIL ENGINE & TEMPLATE SUITE
  * 
  * Strict Brand & Quality Locks:
@@ -770,7 +770,8 @@ export function renderAccountVerificationEmail(params: {
 }): string {
   const expiry = params.expiryMinutes || 15;
   const recipientEmail = (params.email || "").trim();
-  const link = params.verificationLink || `https://engraceddispatch.vercel.app/verified?email=${encodeURIComponent(recipientEmail)}&otp=${encodeURIComponent(params.otp)}`;
+  // C3 remediation: verification links never carry the code itself.
+  const link = params.verificationLink || `https://engraceddispatch.vercel.app/verified?email=${encodeURIComponent(recipientEmail)}`;
   return wrapInMasterLuxuryTemplate({
     title: `Verify Your ESDispatch Account (${params.otp})`,
     preheader: `Your verification passcode is ${params.otp}. Valid for ${expiry} minutes.`,

@@ -93,7 +93,8 @@ async function getTransporter() {
                 pass: config.pass,
             },
             tls: {
-                rejectUnauthorized: false, // Prevents self-signed cert rejections in dev/corporate networks
+                // TLS certificate verification ON by default; opt out only via env.
+                rejectUnauthorized: process.env.SMTP_TLS_REJECT_UNAUTHORIZED !== 'false',
             },
         });
         lastConfigHash = configHash;

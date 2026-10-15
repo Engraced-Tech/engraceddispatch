@@ -1,4 +1,4 @@
-package com.esdispatch.ui.screens
+﻿package com.esdispatch.ui.screens
 
 import android.widget.Toast
 import android.content.Intent
@@ -1352,7 +1352,7 @@ fun ProfileScreen(
                         Spacer(modifier = Modifier.height(4.dp))
                         Text("+234 800 ESDISPATCH (373-472)", fontSize = 14.sp, fontWeight = FontWeight.Black, color = AppTextColor)
                         Spacer(modifier = Modifier.height(2.dp))
-                        Text("Email: careers@esdispatch.com", fontSize = 12.sp, color = TextGray)
+                        Text("Email: careers@engracedsmile.com", fontSize = 12.sp, color = TextGray)
                     }
                 }
                 Spacer(modifier = Modifier.height(20.dp))
@@ -4561,7 +4561,7 @@ fun HelpSupportSheet(
                         Spacer(modifier = Modifier.width(16.dp))
                         Column {
                             Text("Call Support Desk", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = AppOnSurface)
-                            Text("+234 803 123 4567 (24/7 Dispatch Desk)", fontSize = 12.sp, color = TextGray)
+                            Text("+234 905 626 3010 (24/7 Dispatch Desk)", fontSize = 12.sp, color = TextGray)
                         }
                     }
                 }
@@ -4595,7 +4595,7 @@ fun HelpSupportSheet(
                         Spacer(modifier = Modifier.width(16.dp))
                         Column {
                             Text("WhatsApp Live Dispatch", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = AppOnSurface)
-                            Text("+234 803 123 4567 (Direct WhatsApp)", fontSize = 12.sp, color = TextGray)
+                            Text("+234 905 626 3010 (Direct WhatsApp)", fontSize = 12.sp, color = TextGray)
                         }
                     }
                 }
@@ -4622,7 +4622,7 @@ fun HelpSupportSheet(
                 // Email Support
                 Surface(
                     onClick = {
-                        val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:support@ESDispatch.com"))
+                        val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:support@engracedsmile.com"))
                         context.startActivity(intent)
                         dismissWithAnim()
                     },
@@ -4635,7 +4635,7 @@ fun HelpSupportSheet(
                         Spacer(modifier = Modifier.width(16.dp))
                         Column {
                             Text("Email Support Centre", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = AppOnSurface)
-                            Text("support@ESDispatch.com", fontSize = 12.sp, color = TextGray)
+                            Text("support@engracedsmile.com", fontSize = 12.sp, color = TextGray)
                         }
                     }
                 }

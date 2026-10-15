@@ -1,4 +1,4 @@
-# Add project specific ProGuard rules here.
+﻿# Add project specific ProGuard rules here.
 # You can control the set of applied configuration files using the
 # proguardFiles setting in build.gradle.
 
@@ -62,5 +62,8 @@
 # Navigation
 -keep class androidx.navigation.** { *; }
 
-# Keep all app package classes to prevent R8 from stripping or breaking reflections/states
--keep class com.esdispatch.** { *; }
+# M1 remediation: the blanket keep-all rule that disabled obfuscation for the
+# entire app package is removed. Only reflection-sensitive model/data classes
+# and serialization annotations are preserved (see rules above); the rest of
+# the app code is now obfuscated and shrunk by R8.
+

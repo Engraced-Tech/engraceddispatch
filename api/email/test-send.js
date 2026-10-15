@@ -1,4 +1,63 @@
-const nodemailer = require("nodemailer");
+﻿const nodemailer = require("nodemailer");
+
+// Admin-gated (remediation of audit finding C5): the open mail relay is
+// closed. Only requests bearing a valid Firebase ID token for an admin /
+// super_admin account may send through this endpoint.
+
+let adminAuth = null;
+let adminDb = null;
+function getAdmin() {
+  if (!adminDb) {
+    try {
+      const admin = require("firebase-admin");
+      if (admin.apps.length === 0) {
+        const sa = process.env.FIREBASE_SERVICE_ACCOUNT
+          ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
+          : null;
+        admin.initializeApp(
+          sa
+            ? { credential: admin.credential.cert(sa) }
+            : { projectId: process.env.FIREBASE_PROJECT_ID || "engraceddispatch-ffba4" }
+        );
+      }
+      adminAuth = admin.auth();
+      adminDb = admin.firestore();
+    } catch (err) {
+      console.warn("[Test Send] firebase-admin unavailable:", err.message);
+    }
+  }
+  return adminDb;
+}
+
+async function isAuthorizedAdmin(req) {
+  const db = getAdmin();
+  if (!db || !adminAuth) {
+    return false;
+  }
+  const header = req.headers["authorization"] || "";
+  const cookie = String(req.headers.cookie || "");
+  let token = "";
+  if (header.startsWith("Bearer ")) {
+    token = header.slice(7).trim();
+  } else {
+    const match = cookie.match(/(?:^|;\s*)admin_token=([^;]+)/);
+    if (match) {
+      token = decodeURIComponent(match[1]);
+    }
+  }
+  if (!token) {
+    return false;
+  }
+  try {
+    const decoded = await adminAuth.verifyIdToken(token);
+    const userSnap = await db.collection("users").doc(decoded.uid).get();
+    const role = String((userSnap.data() || {}).role || "").toLowerCase();
+    return ["admin", "super_admin", "manager", "owner"].includes(role);
+  } catch (err) {
+    console.warn("[Test Send] Token verification failed:", err.message);
+    return false;
+  }
+}
 
 function extractPlainText(html) {
   if (!html) return "";
@@ -102,7 +161,7 @@ function resolveSmtpConfig(credentials) {
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
@@ -110,6 +169,12 @@ module.exports = async function handler(req, res) {
 
   if (req.method !== "POST") {
     return res.status(405).json({ success: false, error: "Method not allowed" });
+  }
+
+  // Authorization gate: admin token required (C5 remediation).
+  const authorized = await isAuthorizedAdmin(req);
+  if (!authorized) {
+    return res.status(403).json({ success: false, error: "Administrator authentication required." });
   }
 
   try {
@@ -151,7 +216,9 @@ module.exports = async function handler(req, res) {
       port,
       secure,
       auth: { user, pass },
-      tls: { rejectUnauthorized: false },
+      tls: {
+        rejectUnauthorized: process.env.SMTP_TLS_REJECT_UNAUTHORIZED !== "false",
+      },
       connectionTimeout: 15000,
       greetingTimeout: 15000,
       socketTimeout: 20000,

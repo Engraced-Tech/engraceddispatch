@@ -1,4 +1,4 @@
-package com.esdispatch.ui.components
+﻿package com.esdispatch.ui.components
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -291,7 +291,7 @@ fun PrivacyPolicySheet(
                 LegalClauseCard(
                     number = "05",
                     title = "Compliance & Account Control",
-                    content = "Users have full rights to request transaction history audits, correct inaccurate information, or request account data erasure by contacting our compliance desk at compliance@esdispatch.ng.",
+                    content = "Users have full rights to request transaction history audits, correct inaccurate information, or request account data erasure by contacting our compliance desk at compliance@engracedsmile.com.",
                     isDark = isDark,
                     surfaceColor = surfaceColor,
                     textColor = textColor

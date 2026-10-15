@@ -40,24 +40,26 @@ android {
   defaultConfig {
     applicationId = "com.esdispatch.app"
     minSdk = 24
-    targetSdk = 34
+    targetSdk = 35
     versionCode = 2
     versionName = "1.0.1"
 
-    val resolvedMapboxToken = resolveEnv("MAPBOX_ACCESS_TOKEN")
+    val resolvedMapboxToken = resolveEnv("MAPBOX_ACCESS_TOKEN").ifBlank { "unset" }
     buildConfigField("String", "MAPBOX_ACCESS_TOKEN", "\"$resolvedMapboxToken\"")
-    val paystackKey = resolveEnv("PAYSTACK_PUBLIC_KEY")
+    val paystackKey = resolveEnv("PAYSTACK_PUBLIC_KEY").ifBlank { "pk_unset" }
     buildConfigField("String", "PAYSTACK_PUBLIC_KEY", "\"$paystackKey\"")
-    val googleWebClientId = resolveEnv("GOOGLE_WEB_CLIENT_ID")
+    val googleWebClientId = resolveEnv("GOOGLE_WEB_CLIENT_ID").ifBlank { "unset" }
     buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
-    val geminiApiKey = resolveEnv("GEMINI_API_KEY")
+    // AI keys must never silently fall back to another service's key.
+    // When unset, the app disables the AI surface gracefully (empty state).
+    val geminiApiKey = resolveEnv("GEMINI_API_KEY").ifBlank { "DISABLED" }
     buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
     val ttsApiKey = resolveEnv("TTS_API_KEY")
     buildConfigField("String", "TTS_API_KEY", "\"$ttsApiKey\"")
-    val googleMapsApiKey = resolveEnv("GOOGLE_MAPS_API_KEY")
+    val googleMapsApiKey = resolveEnv("GOOGLE_MAPS_API_KEY").ifBlank { "unset" }
     buildConfigField("String", "GOOGLE_MAPS_API_KEY", "\"$googleMapsApiKey\"")
     manifestPlaceholders["GOOGLE_MAPS_API_KEY"] = googleMapsApiKey
-    val backendApiUrl = resolveEnv("BACKEND_API_URL").ifBlank { resolveEnv("NEXT_PUBLIC_APP_URL", "") }
+    val backendApiUrl = resolveEnv("BACKEND_API_URL").ifBlank { resolveEnv("NEXT_PUBLIC_APP_URL", "https://engraceddispatch.vercel.app") }
     buildConfigField("String", "BACKEND_API_URL", "\"$backendApiUrl\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -132,6 +134,8 @@ secrets {
   defaultPropertiesFileName = "../.env.example"
   ignoreList.add("NEXT_PUBLIC_.*")
   ignoreList.add("VITE_.*")
+  ignoreList.add("^$")
+  ignoreList.add(".*[^a-zA-Z0-9_].*")
 }
 
 googleServices {

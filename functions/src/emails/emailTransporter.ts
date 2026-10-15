@@ -1,4 +1,4 @@
-import * as nodemailer from 'nodemailer';
+﻿import * as nodemailer from 'nodemailer';
 import * as admin from 'firebase-admin';
 
 export interface SmtpConfig {
@@ -70,7 +70,8 @@ export async function getTransporter(): Promise<{ transporter: nodemailer.Transp
         pass: config.pass,
       },
       tls: {
-        rejectUnauthorized: false, // Prevents self-signed cert rejections in dev/corporate networks
+        // TLS certificate verification ON by default; opt out only via env.
+        rejectUnauthorized: process.env.SMTP_TLS_REJECT_UNAUTHORIZED !== 'false',
       },
     });
     lastConfigHash = configHash;

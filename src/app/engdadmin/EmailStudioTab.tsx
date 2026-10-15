@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 import React, { useState, useEffect, useMemo } from "react";
 import {
   Mail,
@@ -309,7 +309,8 @@ export default function EmailStudioTab({
           if (d.port) setSmtpPort(Number(d.port));
           if (d.secure !== undefined) setSmtpSecure(Boolean(d.secure));
           if (d.user) setSmtpUser(d.user);
-          if (d.pass) setSmtpPass(d.pass);
+          // The password is managed in server environment variables and is
+          // never persisted (audit finding H8 remediation).
           if (d.fromEmail) setSmtpFromEmail(d.fromEmail);
           if (d.fromName) setSmtpFromName(d.fromName);
         }
@@ -709,6 +710,9 @@ export default function EmailStudioTab({
     if (!db) return;
     setSavingSmtp(true);
     try {
+      // Security remediation (audit finding H8): the SMTP password is NEVER
+      // persisted to Firestore. It is held in server environment variables;
+      // any password typed here is used only for the live test send session.
       await setDoc(
         doc(db, "system_settings", "smtp"),
         {
@@ -716,15 +720,15 @@ export default function EmailStudioTab({
           port: Number(smtpPort),
           secure: Boolean(smtpSecure),
           user: smtpUser.trim(),
-          pass: smtpPass.trim(),
           fromEmail: smtpFromEmail.trim() || smtpUser.trim(),
           fromName: smtpFromName.trim() || "ESDispatch Logistics",
+          passwordManagedInEnv: true,
           updatedAt: new Date().toISOString(),
         },
         { merge: true }
       );
       addToast("success", "Production SMTP settings saved to Firestore!");
-      addLog("SMTP_CONFIG_SAVED", `Updated settings for ${smtpUser}`);
+      addLog("SMTP_CONFIG_SAVED", `Updated settings for ${smtpUser} (password managed in server environment)`);
       setShowSmtpDrawer(false);
     } catch (err: any) {
       addToast("error", "Failed to save SMTP settings: " + err.message);
