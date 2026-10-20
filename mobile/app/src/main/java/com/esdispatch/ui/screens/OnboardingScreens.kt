@@ -516,7 +516,8 @@ fun PreloaderScreen(
     // On zoom complete, navigate to nextRoute
     LaunchedEffect(zoomScale) {
         if (isZoomingIn && zoomScale >= 80f) {
-            onNavigate(nextRoute)
+            val destination = if (nextRoute == "Dashboard" && viewModel.isRiderAccount()) "RiderDashboard" else nextRoute
+            onNavigate(destination)
         }
     }
 

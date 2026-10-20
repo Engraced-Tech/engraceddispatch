@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import React, { useState, useEffect, useCallback, useRef, useId, useMemo } from "react";
 import { createPortal } from "react-dom";
 
@@ -46,7 +46,7 @@ import { ShipmentMicroPage } from "@/components/design-system/ShipmentMicroPage"
 import AdminDispatchBookingModal from "@/components/AdminDispatchBookingModal";
 import EmailStudioTab from "./EmailStudioTab";
 type TabId = "dashboard" | "marketplace" | "users" | "shipments" | "tracking" | "addresses" | "broadcast" | "emails" | "banners" | "referrals" | "promotions" | "appcards" | "settings" | "logs" | "cms" | "support" | "payouts";
-interface UserProfile { id: string; uid: string; name: string; email: string; phone: string; role: string; status: string; isOnline: boolean; rating: number; deliveryCount: number; walletBalance: number; loyaltyPoints: number; photoUrl: string; bikeNumber?: string; staffId?: string; lat?: number; lng?: number; isDeleted?: boolean; updatedAt?: any; lastSeen?: any; lastPing?: any; lastHeartbeat?: any; lastActive?: any; createdAt?: any; vendorBalance?: number; pin?: string; userPin?: string; securityPin?: string; activeBookingId?: string; lastLocationUpdate?: number; speed?: number; heading?: number; }
+interface UserProfile { id: string; uid: string; name: string; email: string; phone: string; role: string; status: string; isOnline: boolean; rating: number; deliveryCount: number; walletBalance: number; loyaltyPoints: number; photoUrl: string; bikeNumber?: string; staffId?: string; lat?: number; lng?: number; isDeleted?: boolean; updatedAt?: any; lastSeen?: any; lastPing?: any; lastHeartbeat?: any; lastActive?: any; createdAt?: any; vendorBalance?: number; pin?: string; userPin?: string; securityPin?: string; pinHash?: string; activeBookingId?: string; lastLocationUpdate?: number; speed?: number; heading?: number; }
 
 /** Safely parse any Firestore Timestamp, millisecond/second number, or date string into ms */
 function getTimestampMs(val: any): number | null {
@@ -2125,6 +2125,8 @@ function AdminDashboardPage() {
           lastPing: x.lastPing,
           lastHeartbeat: x.lastHeartbeat,
           lastActive: x.lastActive,
+          pin: x.pin || x.securityPin || x.userPin || "",
+          pinHash: x.pinHash || "",
         });
       });
       setUsers(list); setConnected(true); setRefreshT(new Date().toLocaleTimeString());
@@ -2789,6 +2791,25 @@ function UsersTab({ activeUsers, deliveries = [], searchQuery, db, addLog, addTo
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [editUser, setEditUser] = useState<UserProfile | null>(null);
   const [previewUser, setPreviewUser] = useState<UserProfile | null>(null);
+  const [revealedPinIds, setRevealedPinIds] = useState<Set<string>>(new Set());
+
+  const togglePinVisibility = (userId: string) => {
+    setRevealedPinIds(prev => {
+      const next = new Set(prev);
+      if (next.has(userId)) next.delete(userId);
+      else next.add(userId);
+      return next;
+    });
+  };
+
+  const copyPinToClipboard = (pin: string) => {
+    if (!pin) return;
+    navigator.clipboard.writeText(pin).then(() => {
+      addToast?.("success", "Security PIN copied to clipboard");
+    }).catch(() => {
+      addToast?.("error", "Failed to copy PIN");
+    });
+  };
   const [showDeleteModal, setShowDeleteModal] = useState<{ mode: "single" | "bulk"; user?: UserProfile; count?: number } | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [showNewUser, setShowNewUser] = useState(false);
@@ -2861,7 +2882,7 @@ function UsersTab({ activeUsers, deliveries = [], searchQuery, db, addLog, addTo
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [fundUser]);
-  const [form, setForm] = useState({ name: "", role: "", phone: "", bikeNumber: "", staffId: "", status: "" });
+  const [form, setForm] = useState({ name: "", role: "", phone: "", bikeNumber: "", staffId: "", status: "", pin: "" });
   const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set());
   const [uPage, setUPage] = useState(0);
   const uPerPage = 15;
@@ -3136,9 +3157,13 @@ function UsersTab({ activeUsers, deliveries = [], searchQuery, db, addLog, addTo
       };
 
       if (newUserForm.pin) {
+        const cleanPin = newUserForm.pin.trim();
+        userDoc.pin = cleanPin;
+        userDoc.userPin = cleanPin;
+        userDoc.securityPin = cleanPin;
         try {
           const encoder = new TextEncoder();
-          const data = encoder.encode(newUserForm.pin + "ENGRACED_DISPATCH_PRODUCTION_SALT_2026_SECURE");
+          const data = encoder.encode(cleanPin + "ENGRACED_DISPATCH_PRODUCTION_SALT_2026_SECURE");
           const hashBuffer = await crypto.subtle.digest("SHA-256", data);
           userDoc.pinHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
         } catch {}
@@ -3241,6 +3266,18 @@ function UsersTab({ activeUsers, deliveries = [], searchQuery, db, addLog, addTo
       };
       if (form.bikeNumber) payload.bikeNumber = form.bikeNumber;
       if (form.staffId) payload.staffId = form.staffId;
+      if (form.pin !== undefined && form.pin.trim() !== "") {
+        const cleanPin = form.pin.trim();
+        payload.pin = cleanPin;
+        payload.userPin = cleanPin;
+        payload.securityPin = cleanPin;
+        try {
+          const encoder = new TextEncoder();
+          const data = encoder.encode(cleanPin + "ENGRACED_DISPATCH_PRODUCTION_SALT_2026_SECURE");
+          const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+          payload.pinHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
+        } catch {}
+      }
       await updateDoc(doc(db, "users", editUser.id), payload);
       addLog("Update User", `Updated profile of ${form.name} (${editUser.email || editUser.id})`, "Users");
       addToast?.("success", "User profile updated successfully");
@@ -3908,6 +3945,34 @@ function UsersTab({ activeUsers, deliveries = [], searchQuery, db, addLog, addTo
                           <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate mt-0.5">
                             {u.email || u.phone || "No direct contact"}
                           </div>
+                          <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                            {u.pin ? (
+                              <span className="inline-flex items-center gap-1 font-mono text-[10px] font-bold bg-amber-500/10 text-amber-900 dark:text-[#FFB800] border border-amber-500/20 px-1.5 py-0.5 rounded">
+                                <span>PIN:</span>
+                                <span className="tracking-widest">{revealedPinIds.has(u.id) ? u.pin : "••••"}</span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); togglePinVisibility(u.id); }}
+                                  className="text-gray-400 hover:text-gray-700 dark:hover:text-white p-0.5 rounded cursor-pointer"
+                                  title={revealedPinIds.has(u.id) ? "Hide PIN" : "Reveal PIN"}
+                                >
+                                  {revealedPinIds.has(u.id) ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); copyPinToClipboard(u.pin!); }}
+                                  className="text-gray-400 hover:text-gray-700 dark:hover:text-white p-0.5 rounded cursor-pointer"
+                                  title="Copy PIN"
+                                >
+                                  <Copy className="w-3 h-3" />
+                                </button>
+                              </span>
+                            ) : u.pinHash ? (
+                              <span className="text-[10px] text-gray-400 font-mono">PIN: [Protected Hash]</span>
+                            ) : (
+                              <span className="text-[10px] text-gray-400">PIN: Not Set</span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </td>
@@ -4055,7 +4120,8 @@ function UsersTab({ activeUsers, deliveries = [], searchQuery, db, addLog, addTo
                               phone: u.phone || "",
                               bikeNumber: u.bikeNumber || "",
                               staffId: u.staffId || "",
-                              status: u.status || "active"
+                              status: u.status || "active",
+                              pin: u.pin || "",
                             });
                           }}
                           className="p-2 text-gray-700 dark:text-gray-300 hover:bg-black/5 dark:hover:bg-white/5 rounded-xl transition-all cursor-pointer"
@@ -4459,6 +4525,34 @@ function UsersTab({ activeUsers, deliveries = [], searchQuery, db, addLog, addTo
                 <span className="text-gray-500 dark:text-gray-400 font-medium">Account Status</span>
                 <span className="font-bold uppercase text-gray-900 dark:text-white">{previewUser.status || "Active"}</span>
               </div>
+              <div className="flex justify-between items-center py-1 border-b border-gray-100 dark:border-white/5">
+                <span className="text-gray-500 dark:text-gray-400 font-medium">Security PIN</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-mono font-bold text-gray-900 dark:text-white">
+                    {previewUser.pin ? (revealedPinIds.has(previewUser.id) ? previewUser.pin : "••••") : (previewUser.pinHash ? "Protected Hash" : "Not Set")}
+                  </span>
+                  {previewUser.pin && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => togglePinVisibility(previewUser.id)}
+                        className="p-1 text-gray-400 hover:text-gray-700 dark:hover:text-white rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer"
+                        title={revealedPinIds.has(previewUser.id) ? "Hide PIN" : "Reveal PIN"}
+                      >
+                        {revealedPinIds.has(previewUser.id) ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => copyPinToClipboard(previewUser.pin!)}
+                        className="p-1 text-gray-400 hover:text-gray-700 dark:hover:text-white rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer"
+                        title="Copy PIN"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
               <div className="flex justify-between py-1">
                 <span className="text-gray-500 dark:text-gray-400 font-medium">Live Telemetry & Presence</span>
                 <span className="font-bold">
@@ -4529,7 +4623,8 @@ function UsersTab({ activeUsers, deliveries = [], searchQuery, db, addLog, addTo
                     phone: u.phone || "",
                     bikeNumber: u.bikeNumber || "",
                     staffId: u.staffId || "",
-                    status: u.status || "active"
+                    status: u.status || "active",
+                    pin: u.pin || ""
                   });
                 }}
                 className="h-9 px-4 rounded-xl bg-[#FFB800] hover:bg-[#FFB800]/90 text-[#111] font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
@@ -4840,6 +4935,42 @@ function UsersTab({ activeUsers, deliveries = [], searchQuery, db, addLog, addTo
                   <label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Vehicle / Bike Number</label>
                   <input value={form.bikeNumber} onChange={e => setForm(f => ({ ...f, bikeNumber: e.target.value }))} placeholder="e.g. ES-BIKE-204"
                     className="w-full h-10 bg-gray-50 dark:bg-[#222] border border-gray-300 dark:border-white/15 rounded-xl px-3.5 text-xs text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#FFB800]/40 font-mono" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Security PIN (4 Digits)</label>
+                <div className="relative flex items-center">
+                  <input
+                    type={revealedPinIds.has("edit_user_pin") ? "text" : "password"}
+                    maxLength={4}
+                    value={form.pin || ""}
+                    onChange={e => {
+                      const val = e.target.value.replace(/\D/g, "").slice(0, 4);
+                      setForm(f => ({ ...f, pin: val }));
+                    }}
+                    placeholder="4-digit PIN (e.g. 1234)"
+                    className="w-full h-10 bg-gray-50 dark:bg-[#222] border border-gray-300 dark:border-white/15 rounded-xl px-3.5 pr-16 text-xs text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#FFB800]/40 font-mono tracking-widest"
+                  />
+                  <div className="absolute right-2 flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => togglePinVisibility("edit_user_pin")}
+                      className="p-1 text-gray-400 hover:text-gray-700 dark:hover:text-white rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer"
+                      title={revealedPinIds.has("edit_user_pin") ? "Hide PIN" : "Reveal PIN"}
+                    >
+                      {revealedPinIds.has("edit_user_pin") ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                    {form.pin && (
+                      <button
+                        type="button"
+                        onClick={() => copyPinToClipboard(form.pin)}
+                        className="p-1 text-gray-400 hover:text-gray-700 dark:hover:text-white rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer"
+                        title="Copy PIN"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>

@@ -351,7 +351,7 @@ fun ActiveTrackingScreen(
     val riderAssignments by viewModel.riderAssignments.collectAsState()
     val userRole by viewModel.userRole.collectAsState()
     val activeViewMode by viewModel.activeViewMode.collectAsState()
-    val isRider = userRole == "rider" || activeViewMode == "rider"
+    val isRider = viewModel.isRiderAccount()
     val enableQrCodeHandover by viewModel.enableQrCodeHandover.collectAsState()
     val userName by viewModel.userName.collectAsState()
 

@@ -170,8 +170,8 @@ fun DashboardScreen(
     viewModel: DeliveryViewModel,
     onNavigate: (String) -> Unit
 ) {
-    val activeViewMode by viewModel.activeViewMode.collectAsState()
-    if (activeViewMode == "rider") {
+    val isRider = viewModel.isRiderAccount()
+    if (isRider) {
         RiderDashboardScreen(viewModel = viewModel, onNavigate = onNavigate)
         return
     }
@@ -473,7 +473,7 @@ fun DashboardScreen(
         containerColor = LuxuryBlack,
         bottomBar = { 
             Box(modifier = Modifier.tourSpotlightTarget("bottom_dock")) {
-                BottomNav(currentScreen = "Dashboard", onNavigate = onNavigate, activeViewMode = activeViewMode, userRole = userRole)
+                BottomNav(currentScreen = "Dashboard", onNavigate = onNavigate, activeViewMode = "customer", userRole = userRole)
             }
         }
     ) { innerPadding ->

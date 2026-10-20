@@ -1,4 +1,4 @@
-﻿package com.esdispatch.ui.screens
+package com.esdispatch.ui.screens
 
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.layout.ContentScale
@@ -163,11 +163,10 @@ fun LoginScreen(
         val uid = currentAuthUid
         val prefs = context.getSharedPreferences("esdispatch_prefs", android.content.Context.MODE_PRIVATE)
         val localUid = prefs.getString("local_uid", "") ?: ""
-        val savedPin = viewModel.getPinSecurely("local_pin")
-        val savedPhone = prefs.getString("local_phone", "") ?: ""
-        val isComplete = localUid.isNotBlank() && savedPin.isNotBlank() && savedPhone.isNotBlank()
-        if (isComplete && !googleAuthInProg && (!uid.isNullOrEmpty() || localUid.isNotEmpty())) {
-            onNavigate("Dashboard")
+        val hasSession = localUid.isNotBlank() && !localUid.startsWith("guest_")
+        if (hasSession && !googleAuthInProg && (!uid.isNullOrEmpty() || localUid.isNotEmpty())) {
+            val destination = if (viewModel.isRiderAccount()) "RiderDashboard" else "Dashboard"
+            onNavigate(destination)
         }
     }
 
@@ -348,16 +347,28 @@ fun LoginScreen(
 
                                 Spacer(modifier = Modifier.height(32.dp))
 
-                                // EMAIL FIELD - Height increased to 62.dp as requested!
+                                // EMAIL / PHONE NUMBER FIELD
                                 OutlinedTextField(
                                     value = email,
                                     onValueChange = { if (currentStep == LoginStep.EMAIL) email = it },
                                     enabled = currentStep == LoginStep.EMAIL,
                                     modifier = Modifier.fillMaxWidth().height(62.dp),
                                     shape = RoundedCornerShape(24.dp),
-                                    placeholder = { Text("Email Address", color = TextGray, fontWeight = FontWeight.Medium) },
-                                    leadingIcon = { Icon(Icons.Filled.Email, null, tint = TextGray) },
+                                    placeholder = { Text("Email or Phone Number", color = TextGray, fontWeight = FontWeight.Medium) },
+                                    leadingIcon = { 
+                                        val isPhoneInput = email.isNotEmpty() && (email.first().isDigit() || email.startsWith("+"))
+                                        Icon(
+                                            if (isPhoneInput) Icons.Filled.Phone else Icons.Filled.Email, 
+                                            null, 
+                                            tint = TextGray
+                                        ) 
+                                    },
                                     singleLine = true,
+                                    keyboardOptions = if (email.isNotEmpty() && (email.first().isDigit() || email.startsWith("+"))) {
+                                        KeyboardOptions(keyboardType = KeyboardType.Phone)
+                                    } else {
+                                        KeyboardOptions(keyboardType = KeyboardType.Email)
+                                    },
                                     textStyle = androidx.compose.ui.text.TextStyle(color = AppOnSurface, fontWeight = FontWeight.SemiBold, fontSize = 15.sp),
                                     colors = OutlinedTextFieldDefaults.colors(
                                         focusedBorderColor = if (isLight) Obsidian else Gold,
@@ -396,14 +407,14 @@ fun LoginScreen(
                                                 keyboardController?.hide()
                                                 focusManager.clearFocus()
                                                 isValidatingPin = true
-                                                delay(1000)
+                                                delay(500)
                                                 viewModel.signInWithFirebase(email, pin) { success, errorText ->
                                                     if (success) {
                                                         Toast.makeText(context, "Access Granted! Welcome Back.", Toast.LENGTH_SHORT).show()
                                                         onNavigate("Preloader")
                                                     } else {
                                                         isPinError = true
-                                                        Toast.makeText(context, errorText ?: "Invalid email or secure PIN.", Toast.LENGTH_SHORT).show()
+                                                        Toast.makeText(context, errorText ?: "Invalid credentials or secure PIN.", Toast.LENGTH_SHORT).show()
                                                         pin = ""
                                                     }
                                                     isValidatingPin = false
@@ -2481,18 +2492,23 @@ fun CompleteProfileScreen(
     var phone by remember { mutableStateOf("") }
     var pin by remember { mutableStateOf("") }
     var confirmPin by remember { mutableStateOf("") }
+    var isPinError by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
+    var profileStep by remember { mutableIntStateOf(0) } // 0: Contact Info, 1: Security PIN
     
     val isLight = MaterialTheme.colorScheme.background == BackgroundLight
     val isDark = !isLight
     val fieldBg = Charcoal
     val fieldBorder = if (isLight) Slate else Gold.copy(alpha = 0.3f)
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
     
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(if (isDark) BackgroundDark else BackgroundLight)
     ) {
+        // Full screen background image, fixed behind the drawer so it doesn't move when drawer scrolls or keyboard opens
         Image(
             painter = painterResource(id = R.drawable.signup),
             contentDescription = "Background",
@@ -2500,326 +2516,399 @@ fun CompleteProfileScreen(
             contentScale = ContentScale.Crop
         )
 
+        // Dark premium overlay over the entire background image
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.65f))
+                .background(Color.Black.copy(alpha = 0.45f))
         )
 
+        // Column containing the spacer and the bottom drawer
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .padding(24.dp)
-                .verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            modifier = Modifier.fillMaxSize()
         ) {
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            // Elegant Gold Header Logo
-            Icon(
-                painter = painterResource(id = R.drawable.ic_logo),
-                contentDescription = "ESDispatch Logo",
-                tint = Gold,
-                modifier = Modifier
-                    .size(64.dp)
-                    .padding(bottom = 8.dp)
-            )
-            
-            Text(
-                text = "ESDISPATCH",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                color = Gold,
-                letterSpacing = 1.5.sp
-            )
-            Text(
-                text = "PREMIUM LOGISTICS & DISPATCH",
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White.copy(alpha = 0.7f),
-                letterSpacing = 2.sp
-            )
-            
-            Spacer(modifier = Modifier.height(32.dp))
-            
-            Card(
+            // Spacer to push the bottom drawer down, exposing the fixed background image behind it
+            Spacer(modifier = Modifier.weight(1.2f))
+
+            // Rounded Rectangle Drawer sitting on top of the fixed background image
+            Surface(
                 modifier = Modifier
                     .fillMaxWidth()
                     .wrapContentHeight(),
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF121212).copy(alpha = 0.85f) else Color.White),
-                border = BorderStroke(1.dp, Gold.copy(alpha = 0.3f))
+                shape = RoundedCornerShape(topStart = 40.dp, topEnd = 40.dp),
+                color = if (isDark) BackgroundDark else BackgroundLight,
+                border = if (isDark) BorderStroke(1.5.dp, Gold) else BorderStroke(1.dp, BorderLight)
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(24.dp),
+                        .wrapContentHeight()
+                        .navigationBarsPadding()
+                        .imePadding()
+                        .padding(horizontal = 24.dp, vertical = 24.dp)
+                        .verticalScroll(rememberScrollState()),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text(
-                        text = "Complete Profile",
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (isDark) Color.White else Obsidian
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Please set up your profile details & PIN to complete your registration.",
-                        fontSize = 12.sp,
-                        color = TextGray,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                    )
-                    
-                    Spacer(modifier = Modifier.height(20.dp))
-                    
-                    // Full Name Input
-                    OutlinedTextField(
-                        value = fullName,
-                        onValueChange = { fullName = it },
-                        label = { Text("Full Name", color = if (isDark) Gold.copy(alpha = 0.7f) else Obsidian.copy(alpha = 0.7f)) },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = if (isDark) Gold else Obsidian,
-                            unfocusedBorderColor = fieldBorder,
-                            focusedContainerColor = fieldBg,
-                            unfocusedContainerColor = fieldBg,
-                            focusedTextColor = if (isDark) Color.White else Obsidian,
-                            unfocusedTextColor = if (isDark) Color.White else Obsidian
-                        ),
-                        singleLine = true,
-                        leadingIcon = { Icon(Icons.Default.Person, contentDescription = "Name", tint = if (isDark) Gold else Obsidian) },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
-                    
-                    // Email Input (Read-only)
-                    OutlinedTextField(
-                        value = currentGoogleEmail,
-                        onValueChange = {},
-                        label = { Text("Email (Locked)", color = if (isDark) Gold.copy(alpha = 0.5f) else Obsidian.copy(alpha = 0.5f)) },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = fieldBorder.copy(alpha = 0.5f),
-                            unfocusedBorderColor = fieldBorder.copy(alpha = 0.5f),
-                            focusedContainerColor = fieldBg.copy(alpha = 0.5f),
-                            unfocusedContainerColor = fieldBg.copy(alpha = 0.5f),
-                            focusedTextColor = if (isDark) Color.White.copy(alpha = 0.5f) else Obsidian.copy(alpha = 0.5f),
-                            unfocusedTextColor = if (isDark) Color.White.copy(alpha = 0.5f) else Obsidian.copy(alpha = 0.5f)
-                        ),
-                        singleLine = true,
-                        enabled = false,
-                        leadingIcon = { Icon(Icons.Default.Email, contentDescription = "Email", tint = if (isDark) Gold.copy(alpha = 0.5f) else Obsidian.copy(alpha = 0.5f)) },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
-                    
-                    // Phone Number Input
-                    val isPhoneWell = remember(phone) { com.esdispatch.util.FormatUtils.isPhoneBeginningWell(phone) }
-                    OutlinedTextField(
-                        value = phone,
-                        onValueChange = { input ->
-                            val cleanInput = buildString {
-                                input.forEachIndexed { index, char ->
-                                    if (char == '+' && index == 0) {
-                                        append(char)
-                                    } else if (char.isDigit()) {
-                                        append(char)
-                                    }
-                                }
-                            }
-                            if (cleanInput.isEmpty()) {
-                                phone = ""
-                            } else {
-                                var maxDigits = 15
-                                if (cleanInput.startsWith("0")) {
-                                    maxDigits = 11
-                                } else if (cleanInput.startsWith("234")) {
-                                    maxDigits = 13
-                                } else if (cleanInput.startsWith("+234")) {
-                                    maxDigits = 14
-                                } else if (cleanInput.startsWith("+1")) {
-                                    maxDigits = 12
-                                } else if (cleanInput.startsWith("+44")) {
-                                    maxDigits = 13
-                                }
-                                phone = cleanInput.take(maxDigits)
-                            }
-                        },
-                        isError = !isPhoneWell && phone.isNotEmpty(),
-                        visualTransformation = com.esdispatch.util.PhoneVisualTransformation(),
-                        label = { Text("Phone Number", color = if (isDark) Gold.copy(alpha = 0.7f) else Obsidian.copy(alpha = 0.7f)) },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = if (isDark) Gold else Obsidian,
-                            unfocusedBorderColor = fieldBorder,
-                            focusedContainerColor = fieldBg,
-                            unfocusedContainerColor = fieldBg,
-                            focusedTextColor = if (isDark) Color.White else Obsidian,
-                            unfocusedTextColor = if (isDark) Color.White else Obsidian,
-                            errorBorderColor = Color(0xFFEA4335)
-                        ),
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                        leadingIcon = { Icon(Icons.Default.Phone, contentDescription = "Phone", tint = if (isDark) Gold else Obsidian) },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    if (!isPhoneWell && phone.isNotEmpty()) {
-                        Text(
-                            text = "Invalid prefix. Must start with local (07/08/09/01) or country code (234/+234)",
-                            color = Color(0xFFEA4335),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(start = 16.dp, top = 4.dp).align(Alignment.Start)
-                        )
-                    }
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
-                    
-                    // 4-Digit PIN Input
-                    OutlinedTextField(
-                        value = pin,
-                        onValueChange = { if (it.length <= 4 && it.all { char -> char.isDigit() }) pin = it },
-                        label = { Text("4-Digit Security PIN", color = if (isDark) Gold.copy(alpha = 0.7f) else Obsidian.copy(alpha = 0.7f)) },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = if (isDark) Gold else Obsidian,
-                            unfocusedBorderColor = fieldBorder,
-                            focusedContainerColor = fieldBg,
-                            unfocusedContainerColor = fieldBg,
-                            focusedTextColor = if (isDark) Color.White else Obsidian,
-                            unfocusedTextColor = if (isDark) Color.White else Obsidian
-                        ),
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                        visualTransformation = PasswordVisualTransformation(),
-                        leadingIcon = { Icon(Icons.Default.Lock, contentDescription = "PIN", tint = if (isDark) Gold else Obsidian) },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Confirm 4-Digit PIN Input
-                    OutlinedTextField(
-                        value = confirmPin,
-                        onValueChange = { if (it.length <= 4 && it.all { char -> char.isDigit() }) confirmPin = it },
-                        label = { Text("Confirm 4-Digit PIN", color = if (isDark) Gold.copy(alpha = 0.7f) else Obsidian.copy(alpha = 0.7f)) },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = if (isDark) Gold else Obsidian,
-                            unfocusedBorderColor = fieldBorder,
-                            focusedContainerColor = fieldBg,
-                            unfocusedContainerColor = fieldBg,
-                            focusedTextColor = if (isDark) Color.White else Obsidian,
-                            unfocusedTextColor = if (isDark) Color.White else Obsidian
-                        ),
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                        visualTransformation = PasswordVisualTransformation(),
-                        leadingIcon = { Icon(Icons.Default.Lock, contentDescription = "Confirm PIN", tint = if (isDark) Gold else Obsidian) },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    
-                    Spacer(modifier = Modifier.height(24.dp))
-                    
-                    Button(
-                        onClick = {
-                            if (fullName.isBlank()) {
-                                Toast.makeText(context, "Please enter your full name", Toast.LENGTH_SHORT).show()
-                                return@Button
-                            }
-                            if (phone.isBlank()) {
-                                Toast.makeText(context, "Please enter your phone number", Toast.LENGTH_SHORT).show()
-                                return@Button
-                            }
-                            if (pin.length != 4) {
-                                Toast.makeText(context, "PIN must be exactly 4 digits", Toast.LENGTH_SHORT).show()
-                                return@Button
-                            }
-                            if (confirmPin != pin) {
-                                Toast.makeText(context, "PINs do not match", Toast.LENGTH_SHORT).show()
-                                return@Button
-                            }
-                            
-                            isSaving = true
-                            scope.launch {
-                                val emailVal = currentGoogleEmail.ifBlank { "google_user@gmail.com" }
-                                val cleanEmail = emailVal.trim().lowercase().replace("[^a-z0-9]".toRegex(), "_")
-                                val uid = viewModel.firebaseUserId.value ?: com.esdispatch.data.FirebaseManager.auth?.currentUser?.uid ?: "user_${System.currentTimeMillis()}"
-                                val hashedPin = com.esdispatch.viewmodel.SecurityUtils.hashPin(pin)
-
-                                viewModel.updateProfile(fullName, emailVal, phone)
-                                viewModel.setUserPin(pin)
-                                viewModel.savePinSecurely("local_pin", pin)
-                                viewModel.savePinSecurely("google_pin_$cleanEmail", pin)
-                                
-                                val prefs = context.getSharedPreferences("esdispatch_prefs", android.content.Context.MODE_PRIVATE)
-                                prefs.edit()
-                                    .putString("local_uid", uid)
-                                    .putString("local_name", fullName)
-                                    .putString("local_phone", phone)
-                                    .putString("local_email", emailVal)
-                                    .putString("google_phone_$cleanEmail", phone)
-                                    .putString("google_name_$cleanEmail", fullName)
-                                    .apply()
-
-                                try {
-                                    val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
-                                    db.collection("users").document(uid).set(
-                                        mapOf(
-                                            "uid" to uid,
-                                            "name" to fullName,
-                                            "email" to emailVal,
-                                            "phone" to phone,
-                                            "pin" to hashedPin,
-                                            "securityPin" to hashedPin,
-                                            "isVerified" to true,
-                                            "emailVerified" to true,
-                                            "updatedAt" to com.google.firebase.Timestamp.now()
-                                        ),
-                                        com.google.firebase.firestore.SetOptions.merge()
-                                    )
-                                    val phoneKey = com.esdispatch.util.FormatUtils.normalizePhoneNumber(phone)
-                                    if (phoneKey.isNotBlank()) {
-                                        db.collection("phone_indices").document(phoneKey).set(
-                                            mapOf("uid" to uid, "email" to emailVal, "updatedAt" to com.google.firebase.Timestamp.now()),
-                                            com.google.firebase.firestore.SetOptions.merge()
-                                        )
-                                    }
-                                } catch (_: Exception) {}
-                                
-                                viewModel.setGoogleAuthInProgress(false)
-                                viewModel.triggerWelcomeNotification(fullName)
-                                delay(300)
-                                isSaving = false
-                                Toast.makeText(context, "Profile Setup Complete!", Toast.LENGTH_SHORT).show()
-                                onNavigate("Preloader")
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isDark) Gold else Obsidian,
-                            contentColor = if (isDark) Obsidian else GoldenWhiteLight
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                        elevation = ButtonDefaults.buttonElevation(
-                            defaultElevation = 0.dp,
-                            pressedElevation = 0.dp,
-                            focusedElevation = 0.dp,
-                            hoveredElevation = 0.dp
-                        ),
+                    // Stepper Progress Bar (2 steps)
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp)),
-                        contentPadding = PaddingValues(vertical = 14.dp),
-                        enabled = !isSaving
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (isSaving) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp,
-                                color = if (isDark) Obsidian else GoldenWhiteLight
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(if (isLight) Obsidian else Gold)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(
+                                    if (profileStep == 1) {
+                                        if (isLight) Obsidian else Gold
+                                    } else {
+                                        TextGray.copy(alpha = 0.3f)
+                                    }
+                                )
+                        )
+                    }
+
+                    Text(
+                        text = if (profileStep == 0) "Step 1 of 2" else "Step 2 of 2",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isLight) Obsidian.copy(alpha = 0.6f) else Gold.copy(alpha = 0.6f),
+                        modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+                    )
+
+                    if (profileStep == 0) {
+                        // STEP 1: Full Name & Phone
+                        Text(
+                            text = "Complete Profile",
+                            fontSize = 30.sp,
+                            fontWeight = FontWeight.Black,
+                            color = AppOnSurface,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Please verify your contact details to finish setting up your account.",
+                            fontSize = 14.sp,
+                            color = TextGray,
+                            fontWeight = FontWeight.Medium,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+
+                        Spacer(modifier = Modifier.height(28.dp))
+
+                        // Full Name Input
+                        OutlinedTextField(
+                            value = fullName,
+                            onValueChange = { fullName = it },
+                            modifier = Modifier.fillMaxWidth().height(62.dp),
+                            shape = RoundedCornerShape(24.dp),
+                            placeholder = { Text("Full Name", color = TextGray, fontWeight = FontWeight.Medium) },
+                            leadingIcon = { Icon(Icons.Filled.Person, null, tint = TextGray) },
+                            singleLine = true,
+                            textStyle = androidx.compose.ui.text.TextStyle(color = AppOnSurface, fontWeight = FontWeight.SemiBold, fontSize = 15.sp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = if (isLight) Obsidian else Gold,
+                                unfocusedBorderColor = fieldBorder,
+                                focusedContainerColor = fieldBg,
+                                unfocusedContainerColor = fieldBg,
+                                focusedTextColor = AppOnSurface,
+                                unfocusedTextColor = AppOnSurface,
+                                focusedPlaceholderColor = TextGray,
+                                unfocusedPlaceholderColor = TextGray
                             )
-                        } else {
-                            Text("SAVE & CONTINUE", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Phone Number Input
+                        val isPhoneWell = remember(phone) { com.esdispatch.util.FormatUtils.isPhoneBeginningWell(phone) }
+                        OutlinedTextField(
+                            value = phone,
+                            onValueChange = { input ->
+                                val cleanInput = buildString {
+                                    input.forEachIndexed { index, char ->
+                                        if (char == '+' && index == 0) {
+                                            append(char)
+                                        } else if (char.isDigit()) {
+                                            append(char)
+                                        }
+                                    }
+                                }
+                                if (cleanInput.isEmpty()) {
+                                    phone = ""
+                                } else {
+                                    var maxDigits = 15
+                                    if (cleanInput.startsWith("0")) {
+                                        maxDigits = 11
+                                    } else if (cleanInput.startsWith("234")) {
+                                        maxDigits = 13
+                                    } else if (cleanInput.startsWith("+234")) {
+                                        maxDigits = 14
+                                    } else if (cleanInput.startsWith("+1")) {
+                                        maxDigits = 12
+                                    } else if (cleanInput.startsWith("+44")) {
+                                        maxDigits = 13
+                                    }
+                                    phone = cleanInput.take(maxDigits)
+                                }
+                            },
+                            isError = !isPhoneWell && phone.isNotEmpty(),
+                            visualTransformation = com.esdispatch.util.PhoneVisualTransformation(),
+                            modifier = Modifier.fillMaxWidth().height(62.dp),
+                            shape = RoundedCornerShape(24.dp),
+                            placeholder = { Text("Phone Number", color = TextGray, fontWeight = FontWeight.Medium) },
+                            leadingIcon = { Icon(Icons.Filled.Phone, null, tint = TextGray) },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                            singleLine = true,
+                            textStyle = androidx.compose.ui.text.TextStyle(color = AppOnSurface, fontWeight = FontWeight.SemiBold, fontSize = 15.sp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = if (isLight) Obsidian else Gold,
+                                unfocusedBorderColor = fieldBorder,
+                                focusedContainerColor = fieldBg,
+                                unfocusedContainerColor = fieldBg,
+                                focusedTextColor = AppOnSurface,
+                                unfocusedTextColor = AppOnSurface,
+                                focusedPlaceholderColor = TextGray,
+                                unfocusedPlaceholderColor = TextGray,
+                                errorBorderColor = Color(0xFFEA4335)
+                            )
+                        )
+
+                        if (!isPhoneWell && phone.isNotEmpty()) {
+                            Text(
+                                text = "Invalid prefix. Must start with local (07/08/09/01) or country code (234/+234)",
+                                color = Color(0xFFEA4335),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(start = 16.dp, top = 4.dp).align(Alignment.Start)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(28.dp))
+
+                        Button(
+                            onClick = {
+                                keyboardController?.hide()
+                                focusManager.clearFocus()
+                                if (fullName.isBlank()) {
+                                    Toast.makeText(context, "Please enter your full name", Toast.LENGTH_SHORT).show()
+                                    return@Button
+                                }
+                                if (phone.isBlank()) {
+                                    Toast.makeText(context, "Please enter your phone number", Toast.LENGTH_SHORT).show()
+                                    return@Button
+                                }
+                                val cleanPhone = phone.filter { it.isDigit() }
+                                if (cleanPhone.length < 10) {
+                                    Toast.makeText(context, "Please enter a valid phone number", Toast.LENGTH_SHORT).show()
+                                    return@Button
+                                }
+                                profileStep = 1
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp),
+                            shape = RoundedCornerShape(20.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isLight) Obsidian else Gold,
+                                contentColor = if (isLight) Gold else Obsidian
+                            )
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    text = "Continue to PIN",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = if (isLight) Gold else Obsidian
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Icon(
+                                    imageVector = Icons.Filled.ArrowForward,
+                                    contentDescription = null,
+                                    tint = if (isLight) Gold else Obsidian,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+
+                    } else {
+                        // STEP 2: Choose 4-Digit Security PIN using official PinInputField
+                        Text(
+                            text = "Set Security PIN",
+                            fontSize = 30.sp,
+                            fontWeight = FontWeight.Black,
+                            color = AppOnSurface,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Enter a 4-digit PIN to secure your wallet and dispatches.",
+                            fontSize = 14.sp,
+                            color = TextGray,
+                            fontWeight = FontWeight.Medium,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+
+                        Spacer(modifier = Modifier.height(24.dp))
+
+                        Text(
+                            text = "Enter 4-Digit PIN",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AppOnSurface,
+                            modifier = Modifier.padding(bottom = 12.dp)
+                        )
+                        PinInputField(
+                            pin = pin,
+                            onPinChange = {
+                                pin = it
+                                isPinError = false
+                            },
+                            isError = isPinError,
+                            obscureText = true
+                        )
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        Text(
+                            text = "Confirm 4-Digit PIN",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AppOnSurface,
+                            modifier = Modifier.padding(bottom = 12.dp)
+                        )
+                        PinInputField(
+                            pin = confirmPin,
+                            onPinChange = {
+                                confirmPin = it
+                                isPinError = false
+                            },
+                            isError = isPinError,
+                            obscureText = true
+                        )
+
+                        Spacer(modifier = Modifier.height(28.dp))
+
+                        Button(
+                            onClick = {
+                                keyboardController?.hide()
+                                focusManager.clearFocus()
+                                if (pin.length != 4) {
+                                    Toast.makeText(context, "PIN must be exactly 4 digits", Toast.LENGTH_SHORT).show()
+                                    isPinError = true
+                                    return@Button
+                                }
+                                if (confirmPin != pin) {
+                                    Toast.makeText(context, "PINs do not match", Toast.LENGTH_SHORT).show()
+                                    isPinError = true
+                                    confirmPin = ""
+                                    return@Button
+                                }
+
+                                isSaving = true
+                                scope.launch {
+                                    val emailVal = currentGoogleEmail.ifBlank { "google_user@gmail.com" }
+                                    val cleanEmail = emailVal.trim().lowercase().replace("[^a-z0-9]".toRegex(), "_")
+                                    val uid = viewModel.firebaseUserId.value ?: com.esdispatch.data.FirebaseManager.auth?.currentUser?.uid ?: "user_${System.currentTimeMillis()}"
+                                    val hashedPin = com.esdispatch.viewmodel.SecurityUtils.hashPin(pin)
+
+                                    viewModel.updateProfile(fullName, emailVal, phone)
+                                    viewModel.setUserPin(pin)
+                                    viewModel.savePinSecurely("local_pin", pin)
+                                    viewModel.savePinSecurely("google_pin_$cleanEmail", pin)
+                                    
+                                    val prefs = context.getSharedPreferences("esdispatch_prefs", android.content.Context.MODE_PRIVATE)
+                                    prefs.edit()
+                                        .putString("local_uid", uid)
+                                        .putString("local_name", fullName)
+                                        .putString("local_phone", phone)
+                                        .putString("local_email", emailVal)
+                                        .putString("google_phone_$cleanEmail", phone)
+                                        .putString("google_name_$cleanEmail", fullName)
+                                        .apply()
+
+                                    try {
+                                        val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                                        db.collection("users").document(uid).set(
+                                            mapOf(
+                                                "uid" to uid,
+                                                "name" to fullName,
+                                                "email" to emailVal,
+                                                "phone" to phone,
+                                                "pin" to hashedPin,
+                                                "securityPin" to hashedPin,
+                                                "isVerified" to true,
+                                                "emailVerified" to true,
+                                                "updatedAt" to com.google.firebase.Timestamp.now()
+                                            ),
+                                            com.google.firebase.firestore.SetOptions.merge()
+                                        )
+                                        val phoneKey = com.esdispatch.util.FormatUtils.normalizePhoneNumber(phone)
+                                        if (phoneKey.isNotBlank()) {
+                                            db.collection("phone_indices").document(phoneKey).set(
+                                                mapOf("uid" to uid, "email" to emailVal, "updatedAt" to com.google.firebase.Timestamp.now()),
+                                                com.google.firebase.firestore.SetOptions.merge()
+                                            )
+                                        }
+                                    } catch (_: Exception) {}
+                                    
+                                    viewModel.setGoogleAuthInProgress(false)
+                                    viewModel.triggerWelcomeNotification(fullName)
+                                    delay(300)
+                                    isSaving = false
+                                    Toast.makeText(context, "Profile Setup Complete!", Toast.LENGTH_SHORT).show()
+                                    onNavigate("Preloader")
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp),
+                            shape = RoundedCornerShape(20.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isLight) Obsidian else Gold,
+                                contentColor = if (isLight) Gold else Obsidian
+                            ),
+                            enabled = !isSaving
+                        ) {
+                            if (isSaving) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                    color = if (isLight) Gold else Obsidian
+                                )
+                            } else {
+                                Text(
+                                    text = "COMPLETE SETUP",
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 15.sp,
+                                    color = if (isLight) Gold else Obsidian
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        TextButton(
+                            onClick = { profileStep = 0 },
+                            enabled = !isSaving
+                        ) {
+                            Text("Back to Details", color = TextGray, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }

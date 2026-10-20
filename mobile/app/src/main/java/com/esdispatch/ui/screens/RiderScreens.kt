@@ -3644,7 +3644,7 @@ fun RiderPermissionReadinessDialog(
         text = {
             Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
                 Text(
-                    text = "To guarantee real-time tracking during delivery journeys and prevent GPS interruptions when your screen locks, ensure these settings are enabled.",
+                    text = "ESDispatch collects location data to enable real-time delivery tracking for customers and automated arrival detection, even when the app is closed or not in use.",
                     fontSize = 12.sp,
                     color = TextGray,
                     lineHeight = 17.sp
@@ -3673,7 +3673,7 @@ fun RiderPermissionReadinessDialog(
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                     PermissionStatusRow(
                         title = "Background Location",
-                        desc = "Allows continuous tracking while phone screen is locked in transit.",
+                        desc = "Enables live courier tracking and automated arrival alerts even when the app is closed or screen is locked.",
                         isGranted = backgroundGranted,
                         onGrant = {
                             if (!fineGranted) {

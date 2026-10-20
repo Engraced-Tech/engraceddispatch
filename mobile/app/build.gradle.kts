@@ -13,7 +13,7 @@ plugins {
 
 android {
   namespace = "com.esdispatch"
-  compileSdk = 35
+  compileSdk = 36
 
   val envFile = rootProject.file("../.env")
   val localPropsFile = rootProject.file("local.properties")
@@ -40,9 +40,9 @@ android {
   defaultConfig {
     applicationId = "com.esdispatch.app"
     minSdk = 24
-    targetSdk = 35
-    versionCode = 2
-    versionName = "1.0.1"
+    targetSdk = 36
+    versionCode = 3
+    versionName = "1.0.2"
 
     val resolvedMapboxToken = resolveEnv("MAPBOX_ACCESS_TOKEN").ifBlank { "unset" }
     buildConfigField("String", "MAPBOX_ACCESS_TOKEN", "\"$resolvedMapboxToken\"")

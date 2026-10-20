@@ -135,6 +135,37 @@ service cloud.firestore {
       return request.resource.data.keys().size() <= 150;
     }
 
+    function isValidPinValue(val) {
+      return val is string && (
+        (val.size() == 4 && val.matches('^[0-9]{4}$')) ||
+        (val.size() == 64 && val.matches('^[0-9a-fA-F]{64}$'))
+      );
+    }
+
+    function validPinCreate(key) {
+      return !request.resource.data.keys().hasAny([key]) ||
+        isValidPinValue(request.resource.data[key]);
+    }
+
+    function validPinUpdate(key) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([key]) ||
+        (!request.resource.data.keys().hasAny([key]) || isValidPinValue(request.resource.data[key]));
+    }
+
+    function validUserPinsOnCreate() {
+      return validPinCreate('pin') &&
+        validPinCreate('userPin') &&
+        validPinCreate('securityPin') &&
+        validPinCreate('pinHash');
+    }
+
+    function validUserPinsOnUpdate() {
+      return validPinUpdate('pin') &&
+        validPinUpdate('userPin') &&
+        validPinUpdate('securityPin') &&
+        validPinUpdate('pinHash');
+    }
+
     // ===============================================================
     // USER PROFILES & SUBCOLLECTIONS
     // ===============================================================
@@ -161,9 +192,9 @@ service cloud.firestore {
         (
           request.auth.uid == userId &&
           !request.resource.data.keys().hasAny([
-            'admin', 'isSuperAdmin', 'permissions', 'pin', 'userPin', 'securityPin',
-            'pinHash', 'riderApproved', 'emailVerified'
+            'admin', 'isSuperAdmin', 'permissions', 'riderApproved', 'emailVerified'
           ]) &&
+          validUserPinsOnCreate() &&
           !(request.resource.data.get('role', '') in ['admin', 'super_admin', 'dispatcher', 'manager', 'owner', 'rider', 'Admin', 'SuperAdmin', 'Dispatcher', 'Manager', 'Owner', 'Rider']) &&
           !(request.resource.data.get('userRole', '') in ['admin', 'super_admin', 'dispatcher', 'manager', 'owner', 'rider', 'Admin', 'SuperAdmin', 'Dispatcher', 'Manager', 'Owner', 'Rider']) &&
           request.resource.data.get('walletBalance', 0) == 0 &&
@@ -171,17 +202,26 @@ service cloud.firestore {
         )
       );
 
-      // Owners may update general profile fields only; sensitive fields are
-      // server-controlled (Admin SDK).
+      // Owners may update general profile fields and manage their security PIN;
+      // sensitive fields are server-controlled (Admin SDK). Wallet debits (decrements)
+      // are allowed for client-side bookings and withdrawals; credits require server/admin.
       allow update: if isAuth() && (
         isAdmin() ||
         (
           isOwner(userId) &&
           !request.resource.data.diff(resource.data).affectedKeys().hasAny([
             'role', 'userRole', 'admin', 'isSuperAdmin', 'permissions',
-            'walletBalance', 'vendorBalance', 'pin', 'userPin', 'securityPin',
-            'pinHash', 'email', 'emailVerified', 'riderApproved'
-          ])
+            'vendorBalance', 'email', 'emailVerified', 'riderApproved'
+          ]) &&
+          validUserPinsOnUpdate() &&
+          (
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['walletBalance']) ||
+            request.resource.data.get('walletBalance', 0) <= resource.data.get('walletBalance', 0)
+          )
+        ) ||
+        (
+          isVerifiedRider() &&
+          updateHasOnly(['loyaltyPoints', 'deliveryCount'])
         )
       );
 
@@ -234,7 +274,7 @@ service cloud.firestore {
       }
 
       match /deliveries/{deliveryId} {
-        allow read, write: if isOwner(userId) || isAdmin() || isDispatcher() ||
+        allow read, write: if isOwner(userId) || isAdmin() || isDispatcher() || isVerifiedRider() ||
           (isAuth() && (
             (exists(/databases/$(database)/documents/deliveries/$(deliveryId)) &&
              isDeliveryParticipant(get(/databases/$(database)/documents/deliveries/$(deliveryId)).data)) ||
@@ -331,9 +371,8 @@ service cloud.firestore {
         (request.auth.token.get('phone_number', '') != '' && request.auth.token.phone_number == resource.data.get('receiverPhone', ''))
       );
 
-      // Client creates are allowed ONLY as unpaid drafts (offline/guest flow)
-      // or by admins/dispatchers booking on behalf of customers.
-      // Server-authoritative paid bookings come from the createBooking callable.
+      // Client creates are allowed for customers (including wallet-paid bookings)
+      // and by admins/dispatchers booking on behalf of customers.
       // C1: no payment/otp/settlement fields, no rider self-assignment.
       allow create: if isAuth() && (
         isAdmin() ||
@@ -342,7 +381,6 @@ service cloud.firestore {
           request.resource.data.get('userId', '') == request.auth.uid &&
           request.resource.data.get('riderId', '') == '' &&
           request.resource.data.get('driverId', '') == '' &&
-          request.resource.data.get('paymentStatus', 'PENDING_PAYMENT') != 'PAID' &&
           !request.resource.data.keys().hasAny(createGuardKeys()) &&
           isReasonableWrite()
         )
@@ -399,17 +437,25 @@ service cloud.firestore {
           isAvailableDelivery(resource.data) &&
           resource.data.get('riderId', '') == '' &&
           request.resource.data.get('riderId', '') == request.auth.uid &&
-          updateHasOnly(['riderId', 'driverId', 'status', 'courierName', 'courierPhone', 'riderBikeNumber', 'progress', 'assignedAt', 'acceptedAt', 'lastUpdated'])
+          updateHasOnly([
+            'riderId', 'driverId', 'assignedRiderId', 'reservedRiderId',
+            'status', 'courierName', 'courierPhone', 'riderBikeNumber',
+            'progress', 'assignedAt', 'acceptedAt', 'lastUpdated',
+            'updatedAt', 'initialCourierLat', 'initialCourierLng',
+            'courierLatitude', 'courierLongitude', 'courierBearing',
+            'courierSpeed', 'courierAccuracy'
+          ])
         )
       );
 
       allow delete: if isAdmin();
 
-      // Subcollections: messages, timeline, chats, POD — participants only.
+      // Subcollections: messages, timeline, chats, POD — participants & verified riders.
       match /{allSubcollections=**} {
         allow read, write: if isAuth() && (
           isAdmin() ||
           isDispatcher() ||
+          isVerifiedRider() ||
           (
             exists(/databases/$(database)/documents/deliveries/$(deliveryId)) &&
             isDeliveryParticipant(get(/databases/$(database)/documents/deliveries/$(deliveryId)).data)
@@ -457,7 +503,6 @@ service cloud.firestore {
           request.resource.data.get('userId', '') == request.auth.uid &&
           request.resource.data.get('riderId', '') == '' &&
           request.resource.data.get('driverId', '') == '' &&
-          request.resource.data.get('paymentStatus', 'PENDING_PAYMENT') != 'PAID' &&
           !request.resource.data.keys().hasAny(createGuardKeys()) &&
           isReasonableWrite()
         )
@@ -508,7 +553,14 @@ service cloud.firestore {
           isAvailableDelivery(resource.data) &&
           resource.data.get('riderId', '') == '' &&
           request.resource.data.get('riderId', '') == request.auth.uid &&
-          updateHasOnly(['riderId', 'driverId', 'status', 'courierName', 'courierPhone', 'riderBikeNumber', 'progress', 'assignedAt', 'acceptedAt', 'lastUpdated'])
+          updateHasOnly([
+            'riderId', 'driverId', 'assignedRiderId', 'reservedRiderId',
+            'status', 'courierName', 'courierPhone', 'riderBikeNumber',
+            'progress', 'assignedAt', 'acceptedAt', 'lastUpdated',
+            'updatedAt', 'initialCourierLat', 'initialCourierLng',
+            'courierLatitude', 'courierLongitude', 'courierBearing',
+            'courierSpeed', 'courierAccuracy'
+          ])
         )
       );
 
@@ -518,6 +570,7 @@ service cloud.firestore {
         allow read, write: if isAuth() && (
           isAdmin() ||
           isDispatcher() ||
+          isVerifiedRider() ||
           (
             exists(/databases/$(database)/documents/parcels/$(parcelId)) &&
             isDeliveryParticipant(get(/databases/$(database)/documents/parcels/$(parcelId)).data)
@@ -947,12 +1000,12 @@ service cloud.firestore {
 
     match /fleet_broadcasts/{docId} {
       allow read: if isAuth();
-      // Bookings may announce themselves to the fleet; edits are staff-only.
-      allow create: if isAuth() && (
-        isAdmin() || isDispatcher() ||
+      // Bookings, dispatchers, and riders claiming dispatches may write broadcasts
+      allow create, update: if isAuth() && (
+        isAdmin() || isDispatcher() || isVerifiedRider() ||
         request.resource.data.get('userId', '') == request.auth.uid
       );
-      allow update, delete: if isAdmin() || isDispatcher();
+      allow delete: if isAdmin() || isDispatcher();
     }
 
     // ===============================================================
@@ -961,7 +1014,11 @@ service cloud.firestore {
 
     match /audit_logs/{docId} {
       allow read: if isAdmin();
-      allow create: if isAdmin();
+      allow create: if isAuth() && (
+        isAdmin() || isDispatcher() || isVerifiedRider() ||
+        request.resource.data.get('actorId', '') == request.auth.uid ||
+        request.resource.data.get('userId', '') == request.auth.uid
+      );
       allow update, delete: if false; // Immutable audit trail
     }
 
@@ -1084,7 +1141,9 @@ service cloud.firestore {
       allow read: if isAuth() && (
         isAdmin() || resource.data.get('userId', '') == request.auth.uid
       );
-      allow create: if false; // Admin SDK only
+      allow create: if isAuth() && (
+        isAdmin() || request.resource.data.get('userId', '') == request.auth.uid
+      );
       allow update, delete: if isAdmin();
     }
 
@@ -1097,7 +1156,7 @@ service cloud.firestore {
         isAuth() && resource.data.get('userId', '') == request.auth.uid
       );
       allow create: if isAuth() && (
-        isAdmin() || request.resource.data.get('userId', '') == request.auth.uid
+        isAdmin() || isVerifiedRider() || request.resource.data.get('userId', '') == request.auth.uid
       );
       allow update, delete: if isAdmin() || (
         isAuth() && resource.data.get('userId', '') == request.auth.uid &&

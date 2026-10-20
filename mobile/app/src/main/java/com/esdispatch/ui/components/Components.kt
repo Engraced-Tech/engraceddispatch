@@ -1,4 +1,4 @@
-﻿package com.esdispatch.ui.components
+package com.esdispatch.ui.components
 
 import com.esdispatch.BuildConfig
 import com.esdispatch.data.ParcelStatus
@@ -270,6 +270,9 @@ fun BottomNav(
     val GoldGradient = Brush.linearGradient(listOf(Gold, GoldDark))
     val navSurface = if (isDark) Obsidian else GoldenWhiteSurface
     val navBorderColor = if (isDark) Color(0x26FFFFFF) else Slate
+    val isRider = activeViewMode.equals("rider", ignoreCase = true) || 
+                  userRole.equals("rider", ignoreCase = true) || 
+                  userRole.equals("driver", ignoreCase = true)
 
     Box(
         modifier = Modifier
@@ -299,7 +302,7 @@ fun BottomNav(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                if (activeViewMode == "rider") {
+                    if (isRider) {
                     // Rider tabs (Manifest, Payroll, Spacer, Tracking, Profile)
                     BottomNavItem(
                         icon = {
@@ -447,7 +450,7 @@ fun BottomNav(
                 .background(Gold)
                 .breathingPulse(active = true, minScale = 0.98f, maxScale = 1.02f, durationMs = 3200)
                 .tactilePress(scaleDown = 0.90f) { 
-                    if (activeViewMode == "rider") {
+                    if (isRider) {
                         onNavigate("ActiveTracking")
                     } else {
                         onNavigate("SendParcel")
@@ -456,8 +459,8 @@ fun BottomNav(
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = if (activeViewMode == "rider") Icons.Filled.DirectionsBike else Icons.Filled.Add,
-                contentDescription = if (activeViewMode == "rider") "Active Mission" else "Create Shipment",
+                imageVector = if (isRider) Icons.Filled.DirectionsBike else Icons.Filled.Add,
+                contentDescription = if (isRider) "Active Mission" else "Create Shipment",
                 tint = Obsidian, // STRICT LOCK: NO WHITE ON GOLD
                 modifier = Modifier.size(28.dp)
             )

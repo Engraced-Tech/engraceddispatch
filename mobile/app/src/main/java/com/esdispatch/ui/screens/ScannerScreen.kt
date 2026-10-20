@@ -79,7 +79,7 @@ fun ScannerScreen(
         onNavigate("BACK")
     }
     val isLight = MaterialTheme.colorScheme.background == BackgroundLight
-    val activeViewMode by viewModel.activeViewMode.collectAsState()
+    val isRider = viewModel.isRiderAccount()
 
     // Dynamic animated laser scanning bar (repeats infinite up and down)
     val infiniteTransition = rememberInfiniteTransition(label = "laser")
@@ -185,7 +185,7 @@ fun ScannerScreen(
                                                             context = context,
                                                             trackingNumber = scannedText,
                                                             onSuccess = {
-                                                                if (activeViewMode == "rider") {
+                                                                if (isRider) {
                                                                     viewModel.setScannedRiderParcel(viewModel.selectedParcel.value)
                                                                     onNavigate("Dashboard")
                                                                 } else {
@@ -391,7 +391,7 @@ fun ScannerScreen(
                                                         context = context,
                                                         trackingNumber = manualCodeInput,
                                                         onSuccess = {
-                                                            if (activeViewMode == "rider") {
+                                                            if (isRider) {
                                                                 viewModel.setScannedRiderParcel(viewModel.selectedParcel.value)
                                                                 onNavigate("Dashboard")
                                                             } else {

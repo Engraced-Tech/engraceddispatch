@@ -1,4 +1,4 @@
-﻿package com.esdispatch
+package com.esdispatch
 
 // Font scale locked to 1.0 via attachBaseContext
 import android.os.Bundle
@@ -146,7 +146,7 @@ class MainActivity : FragmentActivity() {
 
         // STRICT: An active rider shift session is NOT subject to customer PIN lock!
         // When user is a rider and is currently online/working, do NOT lock the app on screen off/minimize.
-        val isRiderWorking = (viewModel.userRole.value == "rider" || viewModel.activeViewMode.value == "rider") && viewModel.isOnline.value
+        val isRiderWorking = viewModel.isRiderAccount() && viewModel.isOnline.value
         if (isRiderWorking) {
             return
         }
@@ -294,7 +294,17 @@ class MainActivity : FragmentActivity() {
                 val networkOnline by viewModel.networkOnline.collectAsState()
 
                 val handleNavigation: (String) -> Unit = { route ->
-                    val effectiveRoute = if (!marketplaceEnabled && (route == "Marketplace" || route.startsWith("VendorStorefront") || route == "VendorPortal" || route.startsWith("VendorProfile"))) {
+                    val isRider = viewModel.isRiderAccount()
+                    val customerOnlyBookingRoutes = setOf(
+                        "SendParcel", "SendParcelDetails", "ExpressBooking",
+                        "EconomyBooking", "BatchBooking", "MultiBooking",
+                        "BookingForm", "BookingDetails", "BookingSelection",
+                        "PaymentSuccess", "OrderLogs"
+                    )
+                    val effectiveRoute = if (isRider && (route in customerOnlyBookingRoutes || route == "Marketplace" || route.startsWith("VendorStorefront") || route == "VendorPortal" || route.startsWith("VendorProfile"))) {
+                        viewModel.showToast("This feature is reserved for customer accounts", com.esdispatch.viewmodel.ToastType.INFO)
+                        "Dashboard"
+                    } else if (!marketplaceEnabled && (route == "Marketplace" || route.startsWith("VendorStorefront") || route == "VendorPortal" || route.startsWith("VendorProfile"))) {
                         "Dashboard"
                     } else {
                         route
@@ -494,7 +504,7 @@ class MainActivity : FragmentActivity() {
                             onUnlocked = {
                                 viewModel.unlockApp()
                                 if (!navController.popBackStack()) {
-                                    val isRider = viewModel.userRole.value.equals("RIDER", ignoreCase = true)
+                                    val isRider = viewModel.isRiderAccount()
                                     val target = if (isRider) "RiderDashboard" else "Dashboard"
                                     navController.navigate(target) {
                                         popUpTo(0) { inclusive = true }
@@ -776,8 +786,10 @@ class MainActivity : FragmentActivity() {
                 var showOfflineBanner by remember { mutableStateOf(false) }
                 LaunchedEffect(networkOnline) {
                     if (!networkOnline) {
-                        delay(2500)
-                        showOfflineBanner = true
+                        delay(7000)
+                        if (!networkOnline) {
+                            showOfflineBanner = true
+                        }
                     } else {
                         showOfflineBanner = false
                     }
