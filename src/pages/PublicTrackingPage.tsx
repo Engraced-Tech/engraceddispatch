@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { db } from "@/lib/firebase";
 import { doc, onSnapshot } from "firebase/firestore";
@@ -98,7 +98,7 @@ export const PublicTrackingPage: React.FC = () => {
   const navigate = useNavigate();
 
   const [delivery, setDelivery] = useState<DeliveryDetails | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(trackingId));
   const [notFound, setNotFound] = useState(false);
   const [navSearch, setNavSearch] = useState("");
   const [fallbackSearch, setFallbackSearch] = useState("");
@@ -108,7 +108,8 @@ export const PublicTrackingPage: React.FC = () => {
   useEffect(() => {
     if (!trackingId) {
       setLoading(false);
-      setNotFound(true);
+      setNotFound(false);
+      setDelivery(null);
       return;
     }
 
@@ -306,6 +307,40 @@ export const PublicTrackingPage: React.FC = () => {
             <p className="text-xs text-[#FFB800] font-mono font-bold uppercase tracking-widest">
               Loading shipment details...
             </p>
+          </div>
+        ) : !trackingId ? (
+          <div className="bg-[#141414] border border-[#2E2E2E] rounded-3xl p-6 sm:p-10 text-center space-y-6 shadow-2xl">
+            <div className="w-16 h-16 bg-[#FFB800]/10 border border-[#FFB800]/20 rounded-2xl flex items-center justify-center mx-auto text-[#FFB800]">
+              <Navigation className="w-8 h-8" />
+            </div>
+            <div>
+              <h2 className="text-2xl font-black font-mono tracking-wider text-[#FFB800] uppercase">
+                Track Your Shipment
+              </h2>
+              <p className="text-xs text-neutral-400 max-w-md mx-auto mt-2 leading-relaxed">
+                Enter your waybill number or parcel ID below to view live courier GPS telemetry, delivery status, and timeline updates across Benin City.
+              </p>
+            </div>
+
+            {/* Embedded Search Bar */}
+            <form onSubmit={handleFallbackSearchSubmit} className="max-w-md mx-auto flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
+                <input
+                  type="text"
+                  value={fallbackSearch}
+                  onChange={(e) => setFallbackSearch(e.target.value)}
+                  placeholder="Enter tracking reference (e.g. TRK-8921)..."
+                  className="w-full h-11 pl-9 pr-3 rounded-xl bg-[#1A1A1A] border border-[#2E2E2E] text-white placeholder-neutral-500 text-xs font-mono focus:border-[#FFB800] focus:ring-1 focus:ring-[#FFB800] outline-none transition-all"
+                />
+              </div>
+              <button
+                type="submit"
+                className="h-11 px-5 bg-[#FFB800] hover:bg-[#FFB800]/90 text-black font-black text-xs uppercase tracking-wider rounded-xl transition-all shrink-0 cursor-pointer shadow-sm active:scale-95"
+              >
+                Track Order
+              </button>
+            </form>
           </div>
         ) : notFound || !delivery ? (
           <div className="bg-[#141414] border border-[#2E2E2E] rounded-3xl p-6 sm:p-10 text-center space-y-6 shadow-2xl">

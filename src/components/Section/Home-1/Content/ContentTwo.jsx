@@ -1,4 +1,5 @@
 "use client";
+import { Navigation, MapPin } from "lucide-react";
 import { ScrollReveal, StaggerContainer, StaggerItem } from "~/components/Animations";
 import Icon from "~/components/Ui/Icon";
 
@@ -30,28 +31,58 @@ const ContentSectionTwo = () => {
                   <div className="zubuz-extara-mt">
                     <StaggerItem>
                       <div className="zubuz-iconbox-wrap-left">
-                        <div className="zubuz-iconbox-icon" style={{ borderRadius: '12px', overflow: 'hidden', padding: 0 }}>
-                          <img src="/images/v1/delivery-bike.jpg" alt="Delivery Bike" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        <div
+                          className="zubuz-iconbox-icon"
+                          style={{
+                            width: 56,
+                            height: 56,
+                            minWidth: 56,
+                            borderRadius: 16,
+                            background: "#111111",
+                            color: "#FFB800",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.12)",
+                            border: "1px solid rgba(255, 184, 0, 0.25)",
+                            padding: 0,
+                          }}
+                        >
+                          <Navigation size={26} strokeWidth={2.2} />
                         </div>
                         <div className="zubuz-iconbox-data">
                           <span>Live GPS Tracking</span>
                           <p>
-Track your delivery in real time from pickup to
-                              drop-off with the Engraced Dispatch app&rsquo;s GPS-enabled system.
+                            Track your delivery in real time from pickup to drop-off with our high-precision GPS telematics network.
                           </p>
                         </div>
                       </div>
                     </StaggerItem>
                     <StaggerItem>
                       <div className="zubuz-iconbox-wrap-left">
-                        <div className="zubuz-iconbox-icon" style={{ borderRadius: '12px', overflow: 'hidden', padding: 0 }}>
-                          <img src="/images/v1/delivery-van.jpg" alt="Delivery Van" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        <div
+                          className="zubuz-iconbox-icon"
+                          style={{
+                            width: 56,
+                            height: 56,
+                            minWidth: 56,
+                            borderRadius: 16,
+                            background: "#111111",
+                            color: "#FFB800",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.12)",
+                            border: "1px solid rgba(255, 184, 0, 0.25)",
+                            padding: 0,
+                          }}
+                        >
+                          <MapPin size={26} strokeWidth={2.2} />
                         </div>
                         <div className="zubuz-iconbox-data">
                           <span>City-Wide Coverage</span>
                           <p>
-                            The Dispatch app delivers to every neighbourhood in Benin City, from
-                            GRA to Uselu, Ekosodin to Oregbeni.
+                            ESDispatch delivers across every district in Benin City — from GRA to Uselu, Ekosodin, Ring Road, and beyond.
                           </p>
                         </div>
                       </div>

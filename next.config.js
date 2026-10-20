@@ -5,7 +5,7 @@ const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   compress: true,
-  transpilePackages: ["firebase", "@firebase/app", "@firebase/auth", "@firebase/firestore", "@firebase/component"],
+  transpilePackages: ["firebase", "@firebase/app", "@firebase/auth", "@firebase/firestore", "@firebase/component", "@firebase/app-check", "@firebase/functions"],
   images: {
     formats: ["image/avif", "image/webp"],
     deviceSizes: [640, 750, 1080, 1200, 1920],
@@ -26,6 +26,8 @@ const nextConfig = {
       'firebase/app': '@firebase/app',
       'firebase/auth': '@firebase/auth',
       'firebase/firestore': '@firebase/firestore',
+      'firebase/app-check': '@firebase/app-check',
+      'firebase/functions': '@firebase/functions',
       '~': path.resolve(__dirname, 'src'),
       '@': path.resolve(__dirname, 'src'),
       ...config.resolve.alias,

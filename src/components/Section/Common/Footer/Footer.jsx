@@ -44,9 +44,10 @@ const Footer = () => {
                   {[
                     { label: "Home", href: "/" },
                     { label: "About Us", href: "/about-us" },
-                    { label: "Services", href: "/service" },
-
-                    { label: "Blog", href: "/blog" },
+                    { label: "Our Services", href: "/service" },
+                    { label: "Live Tracking", href: "/track" },
+                    { label: "FAQ", href: "/faq" },
+                    { label: "Contact Us", href: "/contact-us" },
                   ].map((link) => (
                     <li key={link.href} style={{ marginBottom: 10 }}>
                       <Link
@@ -195,16 +196,22 @@ const Footer = () => {
           <p style={{ color: "rgba(255,255,255,0.5)", fontSize: 14, margin: 0 }}>
             &copy;{year} {content.footerCopyright}
           </p>
-          <div style={{ display: "flex", gap: 20 }}>
-            <Link href="/privacy" style={{ color: "rgba(255,255,255,0.5)", fontSize: 14, textDecoration: "none" }}
-              onMouseEnter={(e) => (e.target.style.color = "#F5A623")}
-              onMouseLeave={(e) => (e.target.style.color = "rgba(255,255,255,0.5)")}
+          <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+            <Link href="/privacy" style={{ color: "rgba(255,255,255,0.6)", fontSize: 14, textDecoration: "none" }}
+              onMouseEnter={(e) => (e.target.style.color = "#FFB800")}
+              onMouseLeave={(e) => (e.target.style.color = "rgba(255,255,255,0.6)")}
             >
               Privacy Policy
             </Link>
-            <Link href="/terms" style={{ color: "rgba(255,255,255,0.5)", fontSize: 14, textDecoration: "none" }}
-              onMouseEnter={(e) => (e.target.style.color = "#F5A623")}
-              onMouseLeave={(e) => (e.target.style.color = "rgba(255,255,255,0.5)")}
+            <Link href="/refund" style={{ color: "rgba(255,255,255,0.6)", fontSize: 14, textDecoration: "none" }}
+              onMouseEnter={(e) => (e.target.style.color = "#FFB800")}
+              onMouseLeave={(e) => (e.target.style.color = "rgba(255,255,255,0.6)")}
+            >
+              Refund Policy
+            </Link>
+            <Link href="/terms" style={{ color: "rgba(255,255,255,0.6)", fontSize: 14, textDecoration: "none" }}
+              onMouseEnter={(e) => (e.target.style.color = "#FFB800")}
+              onMouseLeave={(e) => (e.target.style.color = "rgba(255,255,255,0.6)")}
             >
               Terms of Service
             </Link>

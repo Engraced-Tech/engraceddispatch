@@ -4,7 +4,7 @@ import { ScrollReveal } from "~/components/Animations";
 
 const BrandSection = () => {
   return (
-    <div className="section dark-bg zubuz-section-padding4">
+    <div className="section dark-bg zubuz-section-padding4" style={{ position: "relative", zIndex: 5, marginTop: 0 }}>
       <div className="container">
         <div className="row">
           <div className="col-lg-5">

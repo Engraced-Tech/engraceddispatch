@@ -15,7 +15,7 @@ const FaqPage = () => {
   return (
     <>
       <Header dark />
-      <PageHeader title=" Faq" />
+      <PageHeader title="Frequently Asked Questions" />
       <FaqSection />
       <CtaThree title="Still, you have any questions?" btnText="Contact Us" />
       <Footer />

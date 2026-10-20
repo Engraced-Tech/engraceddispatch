@@ -101,7 +101,8 @@
   transition: transform 0.4s ease-in-out;
 }
 .zubuz-accordion-wrap .accordion-button:not(.collapsed)::after {
-  background-image: url("/images/icon/arrow-bottom-green.svg");
+  background-image: url("/images/icon/arrow-bottom-white.svg");
+  filter: brightness(0) invert(1);
   transform: rotate(180deg);
 }
 .zubuz-accordion-wrap .accordion-button:focus {
