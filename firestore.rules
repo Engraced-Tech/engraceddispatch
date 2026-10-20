@@ -112,10 +112,10 @@ service cloud.firestore {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(allowedKeys);
     }
 
-    // Payment / settlement / OTP integrity fields — never client-writable
+    // Payment / settlement integrity fields — never client-writable on update
     function paymentOtpGuardKeys() {
       return [
-        'otpCode', 'otpHash', 'otpAttempts', 'otpExpiresAt', 'otpIssuedAt',
+        'otpHash',
         'handoverCode', 'securityCode', 'payoutCredited', 'settlementStatus',
         'settlementBlockReason', 'paymentRef', 'paymentStatus', 'settlementApproved'
       ];
@@ -125,7 +125,7 @@ service cloud.firestore {
     // PENDING_PAYMENT) but its value must never be PAID — enforced separately.
     function createGuardKeys() {
       return [
-        'otpCode', 'otpHash', 'otpAttempts', 'otpExpiresAt', 'otpIssuedAt',
+        'otpHash', 'otpAttempts', 'otpExpiresAt', 'otpIssuedAt',
         'handoverCode', 'securityCode', 'payoutCredited', 'settlementStatus',
         'settlementBlockReason', 'paymentRef', 'settlementApproved'
       ];
@@ -139,6 +139,13 @@ service cloud.firestore {
       return val is string && (
         (val.size() == 4 && val.matches('^[0-9]{4}$')) ||
         (val.size() == 64 && val.matches('^[0-9a-fA-F]{64}$'))
+      );
+    }
+
+    function isValidDeliveryOtp(val) {
+      return val is string && (
+        val == '' ||
+        (val.size() == 4 && val.matches('^[0-9]{4}$'))
       );
     }
 
@@ -373,7 +380,7 @@ service cloud.firestore {
 
       // Client creates are allowed for customers (including wallet-paid bookings)
       // and by admins/dispatchers booking on behalf of customers.
-      // C1: no payment/otp/settlement fields, no rider self-assignment.
+      // C1: no payment/settlement fields, no rider self-assignment.
       allow create: if isAuth() && (
         isAdmin() ||
         isDispatcher() ||
@@ -382,13 +389,14 @@ service cloud.firestore {
           request.resource.data.get('riderId', '') == '' &&
           request.resource.data.get('driverId', '') == '' &&
           !request.resource.data.keys().hasAny(createGuardKeys()) &&
+          isValidDeliveryOtp(request.resource.data.get('otpCode', '')) &&
           isReasonableWrite()
         )
       );
 
-      // C1: participant updates deny-list money/otp/payment fields. Riders
-      // may manage operational state; customers may edit booking details and
-      // may only cancel (status → CANCELLED).
+      // C1: participant updates deny-list money/payment fields. Riders
+      // may manage operational state & verify OTP; customers may edit booking details,
+      // set missing OTP, and may only cancel (status → CANCELLED).
       allow update: if isAuth() && (
         isAdmin() ||
         isDispatcher() ||
@@ -406,12 +414,21 @@ service cloud.firestore {
               !request.resource.data.diff(resource.data).affectedKeys().hasAny([
                 'price', 'deliveryFee', 'tipAmount', 'userId', 'senderId',
                 'assignedRiderId', 'reservedRiderId', 'riderId', 'driverId',
-                'receiverPhone', 'receiverName', 'recipientName', 'recipientEmail'
+                'receiverPhone', 'receiverName', 'recipientName', 'recipientEmail',
+                'otpCode'
               ])
             ) ||
             // Customer booking edits (money fields lock once PAID)
             (
               resource.data.get('userId', '') == request.auth.uid &&
+              (
+                !request.resource.data.diff(resource.data).affectedKeys().hasAny(['otpCode']) ||
+                (
+                  resource.data.get('otpCode', '') == '' &&
+                  request.resource.data.get('otpCode', '') is string &&
+                  request.resource.data.get('otpCode', '').matches('^[0-9]{4}$')
+                )
+              ) &&
               !request.resource.data.diff(resource.data).affectedKeys().hasAny([
                 'riderId', 'driverId', 'assignedRiderId', 'reservedRiderId',
                 'courierName', 'courierPhone', 'riderBikeNumber',
@@ -504,6 +521,7 @@ service cloud.firestore {
           request.resource.data.get('riderId', '') == '' &&
           request.resource.data.get('driverId', '') == '' &&
           !request.resource.data.keys().hasAny(createGuardKeys()) &&
+          isValidDeliveryOtp(request.resource.data.get('otpCode', '')) &&
           isReasonableWrite()
         )
       );
@@ -524,11 +542,20 @@ service cloud.firestore {
               !request.resource.data.diff(resource.data).affectedKeys().hasAny([
                 'price', 'deliveryFee', 'tipAmount', 'userId', 'senderId',
                 'assignedRiderId', 'reservedRiderId', 'riderId', 'driverId',
-                'receiverPhone', 'receiverName', 'recipientName', 'recipientEmail'
+                'receiverPhone', 'receiverName', 'recipientName', 'recipientEmail',
+                'otpCode'
               ])
             ) ||
             (
               resource.data.get('userId', '') == request.auth.uid &&
+              (
+                !request.resource.data.diff(resource.data).affectedKeys().hasAny(['otpCode']) ||
+                (
+                  resource.data.get('otpCode', '') == '' &&
+                  request.resource.data.get('otpCode', '') is string &&
+                  request.resource.data.get('otpCode', '').matches('^[0-9]{4}$')
+                )
+              ) &&
               !request.resource.data.diff(resource.data).affectedKeys().hasAny([
                 'riderId', 'driverId', 'assignedRiderId', 'reservedRiderId',
                 'courierName', 'courierPhone', 'riderBikeNumber',

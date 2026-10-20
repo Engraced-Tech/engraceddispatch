@@ -3456,7 +3456,8 @@ fun ParcelDetailBottomSheet(
     parcel: Parcel,
     isDark: Boolean,
     onDismiss: () -> Unit,
-    riderRating: String = "4.9"
+    riderRating: String = "4.9",
+    viewModel: DeliveryViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -3664,8 +3665,18 @@ fun ParcelDetailBottomSheet(
                     }
                 }
 
-                // Delivery OTP Handover Shield (if out for delivery)
-                if (parcel.status == ParcelStatus.OUT_FOR_DELIVERY) {
+                // Delivery OTP Handover Shield (if in transit, out for delivery, or courier arrived)
+                if (parcel.status in listOf(ParcelStatus.TRANSIT, ParcelStatus.OUT_FOR_DELIVERY, ParcelStatus.ARRIVED)) {
+                    val effectiveOtp = parcel.otpCode.ifBlank { viewModel.handoverCode(parcel.id) }
+                    if (effectiveOtp.isBlank()) {
+                        LaunchedEffect(parcel.id) {
+                            viewModel.ensureDeliveryOtp(parcel.id)
+                        }
+                    }
+                    val displayOtp = effectiveOtp.ifBlank { "----" }
+                    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+                    var otpCopied by remember { mutableStateOf(false) }
+
                     Spacer(modifier = Modifier.height(10.dp))
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
@@ -3696,21 +3707,52 @@ fun ParcelDetailBottomSheet(
                                     )
                                 }
                                 
-                                Spacer(modifier = Modifier.height(4.dp))
+                                Spacer(modifier = Modifier.height(6.dp))
                                 
-                                val displayOtp = parcel.otpCode.ifEmpty { "----" }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center,
+                                    modifier = Modifier
+                                        .clickable {
+                                            if (effectiveOtp.isNotBlank()) {
+                                                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(effectiveOtp))
+                                                otpCopied = true
+                                                viewModel.showCustomToast("Handover PIN copied: $effectiveOtp")
+                                            } else {
+                                                viewModel.ensureDeliveryOtp(parcel.id) { freshPin: String ->
+                                                    if (freshPin.isNotBlank()) {
+                                                        clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(freshPin))
+                                                        otpCopied = true
+                                                        viewModel.showCustomToast("Handover PIN copied: $freshPin")
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        .background(if (isDark) LuxuryBlack else Color.White, RoundedCornerShape(8.dp))
+                                        .border(1.dp, if (isDark) Gold.copy(alpha = 0.5f) else Obsidian.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                                ) {
+                                    Text(
+                                        text = displayOtp,
+                                        fontSize = 24.sp,
+                                        fontWeight = FontWeight.Black,
+                                        fontFamily = SpaceGrotesk,
+                                        color = if (isDark) Gold else Obsidian,
+                                        letterSpacing = 4.sp
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Icon(
+                                        imageVector = if (otpCopied) Icons.Filled.Check else Icons.Filled.ContentCopy,
+                                        contentDescription = "Copy Handover PIN",
+                                        tint = if (isDark) Gold else Obsidian,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                
+                                Spacer(modifier = Modifier.height(6.dp))
+                                
                                 Text(
-                                    text = displayOtp,
-                                    fontSize = 24.sp,
-                                    fontWeight = FontWeight.Black,
-                                    color = if (isDark) Color.White else Obsidian,
-                                    letterSpacing = 4.sp
-                                )
-                                
-                                Spacer(modifier = Modifier.height(4.dp))
-                                
-                                Text(
-                                    text = "Share this 4-digit code with the dispatch rider ONLY when they arrive and verify your parcel contents.",
+                                    text = "Share this 4-digit code with the dispatch rider ONLY when they arrive and verify your parcel contents. Tap code to copy.",
                                     fontSize = 9.sp,
                                     color = TextGray,
                                     textAlign = TextAlign.Center,

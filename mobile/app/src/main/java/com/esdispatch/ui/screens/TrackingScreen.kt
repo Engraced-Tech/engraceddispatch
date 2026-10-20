@@ -1850,36 +1850,69 @@ fun ActiveTrackingScreen(
 
                                                 // Prominent 4-Digit Handover PIN Card (Customer Only)
                                                 if (!isRider && (parcel.otpCode.isNotBlank() || parcel.status !in listOf(ParcelStatus.DELIVERED, ParcelStatus.CANCELLED))) {
-                                                    if (parcel.otpCode.isBlank()) {
+                                                    val effectiveOtp = parcel.otpCode.ifBlank { viewModel.handoverCode(parcel.id) }
+                                                    if (effectiveOtp.isBlank()) {
                                                         LaunchedEffect(parcel.id) {
                                                             viewModel.ensureDeliveryOtp(parcel.id)
                                                         }
                                                     }
-                                                    val displayOtp = parcel.otpCode.ifBlank { "••••" }
+                                                    var isOtpRevealed by remember(parcel.id) { mutableStateOf(true) }
+                                                    val rawDisplayOtp = if (effectiveOtp.isNotBlank()) effectiveOtp else "••••"
+                                                    val displayOtp = if (isOtpRevealed) rawDisplayOtp else "••••"
+                                                    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+                                                    var pinCopied by remember { mutableStateOf(false) }
+
                                                     Column(
                                                         horizontalAlignment = Alignment.CenterHorizontally,
                                                         modifier = Modifier
                                                             .fillMaxWidth()
                                                             .padding(vertical = 6.dp)
                                                     ) {
-                                                        Surface(
-                                                            shape = RoundedCornerShape(6.dp),
-                                                            color = Gold.copy(alpha = 0.15f),
-                                                            border = BorderStroke(0.5.dp, Gold)
+                                                        Row(
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.Center
                                                         ) {
-                                                            Text(
-                                                                text = "CONFIDENTIAL HANDOVER PIN",
-                                                                fontSize = 10.sp,
-                                                                fontWeight = FontWeight.Black,
-                                                                letterSpacing = 1.sp,
-                                                                color = if (isDark) GoldLight else Obsidian,
-                                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                                            )
+                                                            Surface(
+                                                                shape = RoundedCornerShape(6.dp),
+                                                                color = Gold.copy(alpha = 0.15f),
+                                                                border = BorderStroke(0.5.dp, Gold)
+                                                            ) {
+                                                                Text(
+                                                                    text = "CONFIDENTIAL HANDOVER PIN",
+                                                                    fontSize = 10.sp,
+                                                                    fontWeight = FontWeight.Black,
+                                                                    letterSpacing = 1.sp,
+                                                                    color = if (isDark) GoldLight else Obsidian,
+                                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                                                )
+                                                            }
+                                                            Spacer(modifier = Modifier.width(8.dp))
+                                                            IconButton(
+                                                                onClick = { isOtpRevealed = !isOtpRevealed },
+                                                                modifier = Modifier.size(24.dp)
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = if (isOtpRevealed) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                                                    contentDescription = if (isOtpRevealed) "Hide PIN" else "Show PIN",
+                                                                    tint = if (isDark) GoldLight else Obsidian,
+                                                                    modifier = Modifier.size(16.dp)
+                                                                )
+                                                            }
                                                         }
                                                         Spacer(modifier = Modifier.height(10.dp))
                                                         Row(
                                                             horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                                            verticalAlignment = Alignment.CenterVertically
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            modifier = Modifier.clickable {
+                                                                val toCopy = effectiveOtp.ifBlank { parcel.otpCode }
+                                                                if (toCopy.isNotBlank()) {
+                                                                    clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(toCopy))
+                                                                    pinCopied = true
+                                                                    viewModel.showCustomToast("Handover PIN copied: $toCopy")
+                                                                } else {
+                                                                    isOtpRevealed = !isOtpRevealed
+                                                                }
+                                                            }
                                                         ) {
                                                             displayOtp.forEach { digit ->
                                                                 Box(
@@ -1900,13 +1933,21 @@ fun ActiveTrackingScreen(
                                                             }
                                                         }
                                                         Spacer(modifier = Modifier.height(8.dp))
-                                                        val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
-                                                        var pinCopied by remember { mutableStateOf(false) }
                                                         OutlinedButton(
                                                             onClick = {
-                                                                if (parcel.otpCode.isNotBlank()) {
-                                                                    clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(parcel.otpCode))
+                                                                val codeToCopy = effectiveOtp.ifBlank { parcel.otpCode }
+                                                                if (codeToCopy.isNotBlank()) {
+                                                                    clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(codeToCopy))
                                                                     pinCopied = true
+                                                                    viewModel.showCustomToast("Handover PIN copied: $codeToCopy")
+                                                                } else {
+                                                                    viewModel.ensureDeliveryOtp(parcel.id) { freshPin ->
+                                                                        if (freshPin.isNotBlank()) {
+                                                                            clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(freshPin))
+                                                                            pinCopied = true
+                                                                            viewModel.showCustomToast("Handover PIN copied: $freshPin")
+                                                                        }
+                                                                    }
                                                                 }
                                                             },
                                                             colors = ButtonDefaults.outlinedButtonColors(

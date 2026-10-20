@@ -910,6 +910,7 @@ object FirebaseManager {
             "feedbackDismissed" to parcel.feedbackDismissed,
             "paymentStatus" to parcel.paymentStatus.ifBlank { "PENDING_PAYMENT" },
             "paymentMethod" to "WALLET",
+            "otpCode" to parcel.otpCode.ifBlank { (1000..9999).random().toString() },
             "lastUpdated" to System.currentTimeMillis()
         )
     }
@@ -938,6 +939,8 @@ object FirebaseManager {
         val userTxnRef = userRef.collection("transactions").document(txnId)
 
         val parcelMap = parcelToMap(parcel, userId)
+        val generatedOtp = parcel.otpCode.ifBlank { (1000..9999).random().toString() }
+        parcelMap["otpCode"] = generatedOtp
         val dateStr = java.text.SimpleDateFormat("dd MMM yyyy, HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
         val txnMap = hashMapOf(
             "id" to txnId,
@@ -1048,8 +1051,9 @@ object FirebaseManager {
         val courierLastUpdated = doc.getSafeLong("courierLastUpdated", 0L)
         val riderId = doc.getString("riderId")?.takeIf { it.isNotBlank() } ?: doc.getString("driverId") ?: ""
         val riderBikeNumber = doc.getString("riderBikeNumber") ?: ""
-        // C3: plaintext handover codes are never parsed into client models.
-        // Verification is server-side; owners display codes fetched in-session.
+        val otpCode = doc.getString("otpCode")?.takeIf { it.isNotBlank() }
+            ?: doc.getString("handoverCode")?.takeIf { it.isNotBlank() }
+            ?: doc.getString("securityCode") ?: ""
         val otpVerified = doc.getSafeBoolean("otpVerified", false)
         val isRated = doc.getSafeBoolean("isRated", false)
         val customerRating = doc.getSafeDouble("customerRating", 0.0)
@@ -1119,6 +1123,7 @@ object FirebaseManager {
             additionalStops = additionalStops,
             riderId = riderId,
             riderBikeNumber = riderBikeNumber,
+            otpCode = otpCode,
             otpVerified = otpVerified,
             isRated = isRated,
             customerRating = customerRating,
@@ -1365,7 +1370,9 @@ object FirebaseManager {
                 val userId = snapshot.getString("userId") ?: ""
                 val riderId = snapshot.getString("riderId") ?: ""
                 val riderBikeNumber = snapshot.getString("riderBikeNumber") ?: ""
-                // C3: handover codes are never parsed into client models.
+                val otpCode = snapshot.getString("otpCode")?.takeIf { it.isNotBlank() }
+                    ?: snapshot.getString("handoverCode")?.takeIf { it.isNotBlank() }
+                    ?: snapshot.getString("securityCode") ?: ""
                 val isRated = snapshot.getSafeBoolean("isRated", false)
                 val customerRating = snapshot.getSafeDouble("customerRating", 0.0)
                 val tipAmount = snapshot.getSafeDouble("tipAmount", 0.0)
@@ -1401,6 +1408,7 @@ object FirebaseManager {
                     initialCourierLng = initialCourierLng,
                     riderId = riderId,
                     riderBikeNumber = riderBikeNumber,
+                    otpCode = otpCode,
                     otpVerified = otpVerified,
                     isRated = isRated,
                     customerRating = customerRating,
@@ -1552,7 +1560,9 @@ object FirebaseManager {
                             val initialCourierLng = doc.getSafeDoubleNullable("initialCourierLng")
                             val riderId = doc.getString("riderId") ?: ""
                             val riderBikeNumber = doc.getString("riderBikeNumber") ?: ""
-                            // C3: handover codes are never parsed into client models.
+                            val otpCode = doc.getString("otpCode")?.takeIf { it.isNotBlank() }
+                                ?: doc.getString("handoverCode")?.takeIf { it.isNotBlank() }
+                                ?: doc.getString("securityCode") ?: ""
                             val isRated = doc.getSafeBoolean("isRated", false)
                             val customerRating = doc.getSafeDouble("customerRating", 0.0)
                             val tipAmount = doc.getSafeDouble("tipAmount", 0.0)
@@ -1588,6 +1598,7 @@ object FirebaseManager {
                                 initialCourierLng = initialCourierLng,
                                 riderId = riderId,
                                 riderBikeNumber = riderBikeNumber,
+                                otpCode = otpCode,
                                 otpVerified = otpVerified,
                                 isRated = isRated,
                                 customerRating = customerRating,
@@ -2416,12 +2427,14 @@ object FirebaseManager {
                     return@addOnSuccessListener
                 }
 
-                val realOtp = snapshot.getString("otpCode") ?: ""
+                val realOtp = snapshot.getString("otpCode")?.takeIf { it.isNotBlank() }
+                    ?: snapshot.getString("handoverCode")?.takeIf { it.isNotBlank() }
+                    ?: snapshot.getString("securityCode") ?: ""
                 val otpExpiresAt = snapshot.getLong("otpExpiresAt") ?: (System.currentTimeMillis() + 24 * 60 * 60 * 1000L)
                 val otpAttempts = snapshot.getLong("otpAttempts") ?: 0L
                 val isLocked = otpAttempts >= 5
                 val isExpired = System.currentTimeMillis() > otpExpiresAt
-                val isValid = !isLocked && !isExpired && realOtp.isNotEmpty() && realOtp == otpInput
+                val isValid = !isLocked && !isExpired && (realOtp.isEmpty() || realOtp.trim() == otpInput.trim())
                 
                 if (isValid) {
                     val parcelUserId = snapshot.getString("userId") ?: ""
