@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { useSiteContent } from "~/lib/useSiteContent";
 import { db } from "~/lib/firebase";
-import { doc, onSnapshot, collection, query, limit } from "firebase/firestore";
+import { doc, onSnapshot } from "firebase/firestore";
 import { Package, Award, Star, CheckCircle2, ArrowRight } from "lucide-react";
 
 const HeroSection = () => {
@@ -76,7 +76,7 @@ const HeroSection = () => {
             variants={containerVariants}
             initial="hidden"
             animate="visible"
-            style={{ position: "relative", zIndex: 3 }}
+            style={{ position: "relative", zIndex: 3, paddingBottom: 0, marginBottom: 0 }}
           >
             <motion.h1 variants={itemVariants} style={{ fontSize: "clamp(2rem, 5vw, 3.5rem)", lineHeight: 1.15 }}>
               <span
@@ -123,39 +123,24 @@ const HeroSection = () => {
                 <span>Book a Delivery</span>
               </Link>
               <Link
+                className="zubuz-default-btn"
                 href="/track"
                 style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "14px 28px",
-                  borderRadius: "100px",
                   background: "#111111",
                   color: "#FFFFFF",
-                  fontWeight: 800,
-                  fontSize: "14px",
-                  textDecoration: "none",
-                  transition: "all 0.25s ease",
-                  border: "1px solid rgba(255, 184, 0, 0.35)",
-                  boxShadow: "0 6px 20px rgba(0, 0, 0, 0.08)",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "#FFB800";
-                  e.currentTarget.style.color = "#111111";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "#111111";
-                  e.currentTarget.style.color = "#FFFFFF";
+                  border: "2px solid #FFB800",
                 }}
               >
-                <span>Track Live Order</span>
-                <ArrowRight size={15} />
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  Track Live Order <ArrowRight size={15} />
+                </span>
               </Link>
             </motion.div>
 
             {/* Hero Mockup image touching the top of Brand section below */}
             <motion.div
               variants={itemVariants}
+              className="zubuz-hero-mocup-wrap"
               style={{
                 marginTop: 36,
                 marginBottom: 0,
@@ -173,12 +158,20 @@ const HeroSection = () => {
                   filter: "drop-shadow(0 -8px 30px rgba(0,0,0,0.10))",
                   lineHeight: 0,
                   marginBottom: 0,
+                  paddingBottom: 0,
                 }}
               >
                 <img
                   src="/images/v1/hero-mocup1.png"
                   alt="ESDispatch Mobile Application"
-                  style={{ width: "100%", height: "auto", display: "block", marginBottom: 0 }}
+                  style={{
+                    width: "100%",
+                    height: "auto",
+                    display: "block",
+                    verticalAlign: "bottom",
+                    marginBottom: 0,
+                    paddingBottom: 0,
+                  }}
                 />
               </div>
             </motion.div>

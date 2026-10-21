@@ -818,3 +818,29 @@ input.admin-search-input,
   font-size: 0.75rem !important;
 }
 
+
+
+/* Ensure hero mockup sits flush against the top edge of BrandSection */
+.zubuz-hero-section {
+  padding-bottom: 0 !important;
+  margin-bottom: 0 !important;
+}
+.zubuz-hero-section .container {
+  padding-bottom: 0 !important;
+  margin-bottom: 0 !important;
+}
+.zubuz-hero-section .zubuz-hero-content,
+.zubuz-hero-section .zubuz-hero-content.center {
+  padding-bottom: 0 !important;
+  margin-bottom: 0 !important;
+}
+.zubuz-hero-section .zubuz-hero-mocup-wrap {
+  margin-bottom: 0 !important;
+  padding-bottom: 0 !important;
+  line-height: 0 !important;
+}
+.zubuz-hero-section .zubuz-hero-mocup-wrap img {
+  display: block !important;
+  vertical-align: bottom !important;
+  margin-bottom: 0 !important;
+}
