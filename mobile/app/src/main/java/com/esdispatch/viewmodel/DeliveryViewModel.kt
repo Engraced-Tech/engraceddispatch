@@ -558,13 +558,13 @@ class DeliveryViewModel : WalletViewModel() {
 
         )
 
-        _baseFare.value = (prefs.getString("pricing_base_fare", "4500.0") ?: "4500.0").toDoubleOrNull() ?: 4500.0
+        _baseFare.value = (prefs.getString("pricing_base_fare", "1500.0") ?: "1500.0").toDoubleOrNull() ?: 1500.0
 
-        _perKgRate.value = (prefs.getString("pricing_per_kg", "250.0") ?: "250.0").toDoubleOrNull() ?: 250.0
+        _perKgRate.value = (prefs.getString("pricing_per_kg", "50.0") ?: "50.0").toDoubleOrNull() ?: 50.0
 
-        _expressSurcharge.value = (prefs.getString("pricing_express", "1500.0") ?: "1500.0").toDoubleOrNull() ?: 1500.0
+        _expressSurcharge.value = (prefs.getString("pricing_express", "500.0") ?: "500.0").toDoubleOrNull() ?: 500.0
 
-        _surgeMultiplier.value = (prefs.getString("pricing_surge", "1.25") ?: "1.25").toDoubleOrNull() ?: 1.25
+        _surgeMultiplier.value = (prefs.getString("pricing_surge", "1.0") ?: "1.0").toDoubleOrNull() ?: 1.0
 
  
 
@@ -582,7 +582,17 @@ class DeliveryViewModel : WalletViewModel() {
 
                     (snap.get("expressSurcharge") as? Number)?.toDouble()?.let { _expressSurcharge.value = it }
 
+                    val rawGlobalTypes = snap.get("deliveryTypes") as? List<*>
+                    if (!rawGlobalTypes.isNullOrEmpty()) {
+                        updateDeliveryServicesFromList(rawGlobalTypes)
+                    }
+
                     (snap.get("surgeMultiplier") as? Number)?.toDouble()?.let { _surgeMultiplier.value = it }
+
+                    val rawTypes = snap.get("deliveryTypes") as? List<*>
+                    if (!rawTypes.isNullOrEmpty()) {
+                        updateDeliveryServicesFromList(rawTypes)
+                    }
 
                     
 
@@ -1288,27 +1298,75 @@ class DeliveryViewModel : WalletViewModel() {
 
 
 
-    private val _baseFare = MutableStateFlow(4500.0)
+    private val _baseFare = MutableStateFlow(1500.0)
 
     val baseFare: StateFlow<Double> = _baseFare.asStateFlow()
 
-
-
-    private val _perKgRate = MutableStateFlow(250.0)
+    private val _perKgRate = MutableStateFlow(50.0)
 
     val perKgRate: StateFlow<Double> = _perKgRate.asStateFlow()
 
-
-
-    private val _expressSurcharge = MutableStateFlow(1500.0)
+    private val _expressSurcharge = MutableStateFlow(500.0)
 
     val expressSurcharge: StateFlow<Double> = _expressSurcharge.asStateFlow()
 
-
-
-    private val _surgeMultiplier = MutableStateFlow(1.25)
+    private val _surgeMultiplier = MutableStateFlow(1.0)
 
     val surgeMultiplier: StateFlow<Double> = _surgeMultiplier.asStateFlow()
+
+    private val _deliveryServices = MutableStateFlow<Map<String, com.esdispatch.data.DeliveryServiceConfig>>(
+        mapOf(
+            "express" to com.esdispatch.data.DeliveryServiceConfig("express", "Express Delivery", true, 2000.0, 120.0, 50.0, 0.0, "Same-day priority express delivery"),
+            "economy" to com.esdispatch.data.DeliveryServiceConfig("economy", "Economy Delivery", true, 1000.0, 80.0, 40.0, 0.0, "Affordable scheduled standard delivery"),
+            "batch" to com.esdispatch.data.DeliveryServiceConfig("batch", "Batch Booking", true, 1800.0, 80.0, 40.0, 500.0, "Consolidated vendor orders dispatch"),
+            "multi" to com.esdispatch.data.DeliveryServiceConfig("multi", "Multi-Stop Delivery", true, 1800.0, 100.0, 50.0, 800.0, "Multi-destination route dispatch")
+        )
+    )
+    val deliveryServices: StateFlow<Map<String, com.esdispatch.data.DeliveryServiceConfig>> = _deliveryServices.asStateFlow()
+
+    fun updateDeliveryServicesFromList(rawList: List<*>?) {
+        if (rawList.isNullOrEmpty()) return
+        val current = _deliveryServices.value.toMutableMap()
+        for (item in rawList) {
+            val d = item as? Map<*, *> ?: continue
+            val id = d["id"]?.toString()?.lowercase() ?: continue
+            val name = d["name"]?.toString() ?: id.replaceFirstChar { it.uppercase() }
+            val enabled = d["enabled"] as? Boolean ?: true
+            val base = (d["baseFare"] as? Number)?.toDouble() ?: current[id]?.baseFare ?: 1500.0
+            val perKm = (d["perKm"] as? Number)?.toDouble() ?: current[id]?.perKm ?: 100.0
+            val perKg = (d["perKg"] as? Number)?.toDouble() ?: current[id]?.perKg ?: 50.0
+            val perExtraStop = (d["perExtraStop"] as? Number)?.toDouble() ?: current[id]?.perExtraStop ?: 800.0
+            val desc = d["description"]?.toString() ?: current[id]?.description ?: ""
+            current[id] = com.esdispatch.data.DeliveryServiceConfig(
+                id = id,
+                name = name,
+                enabled = enabled,
+                baseFare = base,
+                perKm = perKm,
+                perKg = perKg,
+                perExtraStop = perExtraStop,
+                description = desc
+            )
+        }
+        _deliveryServices.value = current
+    }
+
+    fun getServiceConfig(serviceType: String): com.esdispatch.data.DeliveryServiceConfig {
+        val key = when (serviceType.lowercase()) {
+            "express" -> "express"
+            "economy" -> "economy"
+            "batch" -> "batch"
+            "multi", "multi-stop", "multistop" -> "multi"
+            else -> "economy"
+        }
+        return _deliveryServices.value[key] ?: when (key) {
+            "express" -> com.esdispatch.data.DeliveryServiceConfig("express", "Express Delivery", true, 2000.0, 120.0, 50.0, 0.0, "Same-day priority express delivery")
+            "economy" -> com.esdispatch.data.DeliveryServiceConfig("economy", "Economy Delivery", true, 1000.0, 80.0, 40.0, 0.0, "Affordable scheduled standard delivery")
+            "batch" -> com.esdispatch.data.DeliveryServiceConfig("batch", "Batch Booking", true, 1800.0, 80.0, 40.0, 500.0, "Consolidated vendor orders dispatch")
+            "multi" -> com.esdispatch.data.DeliveryServiceConfig("multi", "Multi-Stop Delivery", true, 1800.0, 100.0, 50.0, 800.0, "Multi-destination route dispatch")
+            else -> com.esdispatch.data.DeliveryServiceConfig("economy", "Economy Delivery", true, 1000.0, 80.0, 40.0, 0.0)
+        }
+    }
 
 
 
@@ -1441,6 +1499,7 @@ class DeliveryViewModel : WalletViewModel() {
             )
 
             db?.collection("system_config")?.document("pricing")?.set(pricingData, com.google.firebase.firestore.SetOptions.merge())
+            db?.collection("system_config")?.document("global_settings")?.set(pricingData, com.google.firebase.firestore.SetOptions.merge())
 
         } catch (e: Exception) {
 
@@ -11560,256 +11619,144 @@ class DeliveryViewModel : WalletViewModel() {
 
 
 
-    fun calculateDynamicQuote(
-
-        originLat: Double,
-
-        originLng: Double,
-
-        destLat: Double,
-
-        destLng: Double,
-
+    fun computeFinalDeliveryFare(
         serviceType: String,
-
-        weight: Double = 1.0,
-
-        quantity: Int = 1,
-
-        length: Int = 20,
-
-        width: Int = 15,
-
-        height: Int = 10,
-
-        stopsCount: Int = 0,
-
-        insuranceType: String = "none",
-
-        pickupAddress: String = "",
-
-        deliveryAddress: String = ""
-
-    ): PendingQuote {
-
-        try {
-
-            // Calculate distance in km from coordinates using Haversine formula
-
-            val distanceKm = calculateHaversineDistance(originLat, originLng, destLat, destLng)
-
-            
-
-            val base = _baseFare.value
-
-            val perKg = _perKgRate.value
-
-            val express = _expressSurcharge.value
-
-            val surge = _surgeMultiplier.value
-
-            val wt = if (weight > 0.0) weight else 1.0
-
-
-
-            // Apply business logic (base rate + per km)
-
-            val baseRate = when (serviceType) {
-
-                "Express" -> (base * 1.5 + (wt * perKg) + express + distanceKm * 150.0) * surge
-
-                "Economy" -> (base * 0.7 + (wt * perKg * 0.8) + distanceKm * 100.0) * surge
-
-                "Batch" -> (base * 0.9 + (wt * perKg * 0.9) + distanceKm * 110.0) * surge
-
-                "Multi" -> (base * 1.8 + (wt * perKg * 1.2) + distanceKm * 180.0 + stopsCount * 1500.0) * surge
-
-                else -> (base * 0.7 + (wt * perKg * 0.8) + distanceKm * 100.0) * surge
-
-            }
-
-
-
-            // Surcharges
-
-            val volumeCm3 = length * width * height
-
-            val volumeSurcharge = (volumeCm3 / 1000.0) * 50.0
-
-            val stopsSurcharge = stopsCount * 1500.0
-
-            val quantityFactor = 1.0 + (quantity - 1) * 0.8
-
-            val insuranceFee = when (insuranceType) {
-
-                "basic" -> 250.00
-
-                "premium" -> 1000.00
-
-                else -> 0.0
-
-            }
-
-
-
-            val calculatedTotal = (baseRate + volumeSurcharge + stopsSurcharge) * quantityFactor + insuranceFee
-
-            val finalPrice = Math.round(calculatedTotal / 50.0) * 50.0
-
-
-
-            return PendingQuote.Success(
-
-                price = finalPrice,
-
-                distanceKm = distanceKm,
-
-                pickupAddress = pickupAddress.ifBlank { "Lat: $originLat, Lng: $originLng" },
-
-                deliveryAddress = deliveryAddress.ifBlank { "Lat: $destLat, Lng: $destLng" },
-
-                serviceType = serviceType
-
-            )
-
-        } catch (e: Exception) {
-
-            return PendingQuote.Error(e.message ?: "Pricing calculation error")
-
-        }
-
-    }
-
-
-
-    fun calculateDynamicPrice(
-
-        serviceType: String,
-
+        distanceKm: Double,
         weight: Double,
-
         quantity: Int,
-
         length: Int,
-
         width: Int,
-
         height: Int,
-
         stopsCount: Int,
-
         insuranceType: String = "none"
-
     ): Double {
+        val cfg = getServiceConfig(serviceType)
+        val base = cfg.baseFare
+        val perKm = cfg.perKm
+        val perKg = cfg.perKg
+        val extraStopFee = cfg.perExtraStop
 
-        val base = _baseFare.value
+        // Distance: If pickup & delivery are at the same location or < 0.2 km, distance charge is 0
+        val effectiveDistKm = if (distanceKm < 0.2) 0.0 else distanceKm
+        val distanceCharge = effectiveDistKm * perKm
 
-        val perKg = _perKgRate.value
+        // Weight: First 2.0 kg is included in base fare
+        val extraWeight = if (weight > 2.0) weight - 2.0 else 0.0
+        val weightCharge = extraWeight * perKg
 
-        val express = _expressSurcharge.value
-
-        val surge = _surgeMultiplier.value
-
-        val wt = if (weight > 0.0) weight else 1.0
-
-
-
-        val draft = _parcelDraft.value
-
-        val distanceKm = if (_isDynamicPricingEnabled.value) {
-
-            if (draft.pickupLat != null && draft.pickupLng != null && draft.deliveryLat != null && draft.deliveryLng != null &&
-
-                draft.pickupLat != 0.0 && draft.deliveryLat != 0.0) {
-
-                haversineDistance(draft.pickupLat!!, draft.pickupLng!!, draft.deliveryLat!!, draft.deliveryLng!!)
-
-            } else {
-
-                estimateDistanceBetween(draft.pickupAddress, draft.deliveryAddress)
-
-            }
-
-        } else {
-
-            5.0 // Manual Mode disables the distance-based pricing multiplier and uses a flat distance default
-
+        // Stops / Batch items
+        val effectiveStops = when (serviceType.lowercase()) {
+            "batch" -> maxOf(stopsCount, quantity)
+            "multi", "multi-stop", "multistop" -> stopsCount
+            else -> 0
         }
+        val extraStops = if (effectiveStops > 1) effectiveStops - 1 else 0
+        val stopsCharge = extraStops * extraStopFee
 
-
-
-        // Calculate dynamic base price using admin settings
-
-        val baseRate = when (serviceType) {
-
-            "Express" -> (base * 1.5 + (wt * perKg) + express + distanceKm * 150.0) * surge
-
-            "Economy" -> (base * 0.7 + (wt * perKg * 0.8) + distanceKm * 100.0) * surge
-
-            "Batch" -> (base * 0.9 + (wt * perKg * 0.9) + distanceKm * 110.0) * surge
-
-            "Multi" -> (base * 1.8 + (wt * perKg * 1.2) + distanceKm * 180.0 + stopsCount * 1500.0) * surge
-
-            else -> (base * 0.7 + (wt * perKg * 0.8) + distanceKm * 100.0) * surge
-
-        }
-
-
-
-        // Volume surcharge: ₦50 per 1000 cm3
-
+        // Bulky volume surcharge (only if > standard shoebox 8000 cm3)
         val volumeCm3 = length * width * height
+        val volumeCharge = if (volumeCm3 > 8000) ((volumeCm3 - 8000) / 1000.0) * 30.0 else 0.0
 
-        val volumeSurcharge = (volumeCm3 / 1000.0) * 50.0
+        // Subtotal before surge
+        val subtotal = base + distanceCharge + weightCharge + stopsCharge + volumeCharge
 
+        // Dynamic Surge Multiplier (Default 1.0 = Normal)
+        val surge = if (_surgeMultiplier.value > 0.0) _surgeMultiplier.value else 1.0
+        var total = subtotal * surge
 
-
-        // Multi-stop surcharge: ₦1,500 per extra stop
-
-        val stopsSurcharge = stopsCount * 1500.0
-
-
-
-        // Quantity multiplier: 20% discount on additional items
-
-        val quantityFactor = 1.0 + (quantity - 1) * 0.8
-
-
-
-        // Insurance surcharge
-
-        val insuranceFee = when (insuranceType) {
-
+        // Optional Transit Insurance
+        val insuranceFee = when (insuranceType.lowercase()) {
             "basic" -> 250.00
-
             "premium" -> 1000.00
-
             else -> 0.0
-
         }
+        total += insuranceFee
 
-
-
-        var calculatedTotal = (baseRate + volumeSurcharge + stopsSurcharge) * quantityFactor + insuranceFee
-
-        
-
-        // Apply Admin Discount
-
+        // Admin Promotional Discount
         if (_adminDiscountEnabled.value) {
-
-            val discountFactor = 1.0 - (_adminDiscountPercent.value / 100.0)
-
-            calculatedTotal *= discountFactor
-
+            val discountFactor = 1.0 - (_adminDiscountPercent.value / 100.0).coerceIn(0.0, 1.0)
+            total *= discountFactor
         }
-
-        
 
         // Round to nearest 50 NGN
+        return (Math.round(total / 50.0) * 50.0).coerceAtLeast(base)
+    }
 
-        return Math.round(calculatedTotal / 50.0) * 50.0
+    fun calculateDynamicQuote(
+        originLat: Double,
+        originLng: Double,
+        destLat: Double,
+        destLng: Double,
+        serviceType: String,
+        weight: Double = 1.0,
+        quantity: Int = 1,
+        length: Int = 20,
+        width: Int = 15,
+        height: Int = 10,
+        stopsCount: Int = 0,
+        insuranceType: String = "none",
+        pickupAddress: String = "",
+        deliveryAddress: String = ""
+    ): PendingQuote {
+        try {
+            val distanceKm = calculateHaversineDistance(originLat, originLng, destLat, destLng)
+            val finalPrice = computeFinalDeliveryFare(
+                serviceType = serviceType,
+                distanceKm = distanceKm,
+                weight = weight,
+                quantity = quantity,
+                length = length,
+                width = width,
+                height = height,
+                stopsCount = stopsCount,
+                insuranceType = insuranceType
+            )
 
+            return PendingQuote.Success(
+                price = finalPrice,
+                distanceKm = distanceKm,
+                pickupAddress = pickupAddress.ifBlank { "Lat: $originLat, Lng: $originLng" },
+                deliveryAddress = deliveryAddress.ifBlank { "Lat: $destLat, Lng: $destLng" },
+                serviceType = serviceType
+            )
+        } catch (e: Exception) {
+            return PendingQuote.Error(e.message ?: "Pricing calculation error")
+        }
+    }
+
+    fun calculateDynamicPrice(
+        serviceType: String,
+        weight: Double,
+        quantity: Int,
+        length: Int,
+        width: Int,
+        height: Int,
+        stopsCount: Int,
+        insuranceType: String = "none"
+    ): Double {
+        val draft = _parcelDraft.value
+        val distanceKm = if (_isDynamicPricingEnabled.value) {
+            if (draft.pickupLat != null && draft.pickupLng != null && draft.deliveryLat != null && draft.deliveryLng != null &&
+                draft.pickupLat != 0.0 && draft.deliveryLat != 0.0) {
+                haversineDistance(draft.pickupLat!!, draft.pickupLng!!, draft.deliveryLat!!, draft.deliveryLng!!)
+            } else {
+                estimateDistanceBetween(draft.pickupAddress, draft.deliveryAddress)
+            }
+        } else {
+            0.0
+        }
+
+        return computeFinalDeliveryFare(
+            serviceType = serviceType,
+            distanceKm = distanceKm,
+            weight = weight,
+            quantity = quantity,
+            length = length,
+            width = width,
+            height = height,
+            stopsCount = stopsCount,
+            insuranceType = insuranceType
+        )
     }
 
 

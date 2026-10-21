@@ -8114,6 +8114,49 @@ function Toggle({ label, desc, checked, onChange }: { label: string; desc?: stri
       <div className="w-9 h-5 bg-gray-200 dark:bg-gray-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-[#FFB800]/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#FFB800]"></div></label></div>;
 }
 
+const DEFAULT_DELIVERY_SERVICES = [
+  {
+    id: "express",
+    name: "Express Delivery",
+    enabled: true,
+    baseFare: 2000,
+    perKm: 120,
+    perKg: 50,
+    perExtraStop: 0,
+    description: "Instant direct point-to-point priority courier dispatch"
+  },
+  {
+    id: "economy",
+    name: "Economy Delivery",
+    enabled: true,
+    baseFare: 1000,
+    perKm: 80,
+    perKg: 40,
+    perExtraStop: 0,
+    description: "Scheduled standard dispatch within daily operational window"
+  },
+  {
+    id: "batch",
+    name: "Batch Booking",
+    enabled: true,
+    baseFare: 1800,
+    perKm: 80,
+    perKg: 40,
+    perExtraStop: 500,
+    description: "Consolidated merchant parcel dispatch (multiple packages from one vendor)"
+  },
+  {
+    id: "multi",
+    name: "Multi-Stop Delivery",
+    enabled: true,
+    baseFare: 1800,
+    perKm: 100,
+    perKg: 50,
+    perExtraStop: 800,
+    description: "Single route with multiple intermediate/final destination drop-offs"
+  }
+];
+
 function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
   const [sForm, setSForm] = useState<any>({});
   const [fcmKey, setFcmKey] = useState("");
@@ -8125,6 +8168,11 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
   const [recalibratingSettings, setRecalibratingSettings] = useState(false);
   const [purgingSettings, setPurgingSettings] = useState(false);
 
+  // Live Fare Simulator State
+  const [simDistance, setSimDistance] = useState<number>(5);
+  const [simWeight, setSimWeight] = useState<number>(1);
+  const [simStops, setSimStops] = useState<number>(1);
+
   const handleSettingsPurgeUsers = async () => {
     setPurgingSettings(true);
     try {
@@ -8132,7 +8180,6 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
       const userSnap = await getDocs(collection(db, "users"));
       let upgradedUsers = 0;
       let syncedDeliveries = 0;
-      let generatedPins = 0;
 
       for (const uDoc of userSnap.docs) {
         const uData = uDoc.data();
@@ -8178,9 +8225,6 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
             const curStatus = (dData.status || "").toUpperCase();
             const subUpdates: any = {};
 
-            if ((!dData.otpCode || dData.otpCode.trim() === "") && !["DELIVERED", "CANCELLED"].includes(curStatus)) {
-              console.info(`[UsersTab] Handover code for ${dId} will auto-issue on courier arrival.`);
-            }
             if (dData.completedTimestamp && curStatus !== "DELIVERED") {
               subUpdates.status = "DELIVERED";
               subUpdates.progress = 1.0;
@@ -8204,7 +8248,7 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
         } catch (_) {}
       }
 
-      addLog("Purge & Upgrade Users", `Settings maintenance: ${upgradedUsers} users normalized, ${syncedDeliveries} delivery mirrors synced, ${generatedPins} PINs generated.`);
+      addLog("Purge & Upgrade Users", `Settings maintenance: ${upgradedUsers} users normalized, ${syncedDeliveries} delivery mirrors synced.`);
       addToast?.("success", `Purge & Clean Up complete: ${upgradedUsers} accounts normalized, ${syncedDeliveries} deliveries synced.`);
     } catch (e: any) {
       addToast?.("error", "Purge & Clean Up failed: " + e.message);
@@ -8218,7 +8262,6 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
     try {
       const snap = await getDocs(collection(db, "deliveries"));
       let resolvedCount = 0;
-      let pinCount = 0;
       let syncCount = 0;
       const now = Timestamp.now();
 
@@ -8228,10 +8271,6 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
         const uId = dData.userId || "";
         const curStatus = (dData.status || "").toUpperCase();
         const rootUpdates: any = {};
-
-        if ((!dData.otpCode || dData.otpCode.trim() === "") && !["DELIVERED", "CANCELLED"].includes(curStatus)) {
-          console.info(`[UsersTab] Handover code for ${delId} will auto-issue on courier arrival.`);
-        }
 
         if (dData.completedTimestamp && curStatus !== "DELIVERED") {
           rootUpdates.status = "DELIVERED";
@@ -8283,26 +8322,12 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
                 syncCount++;
               }
             }
-
-            if (targetStatus === "DELIVERED") {
-              const loyaltyRef = doc(db, "customer_loyalty_points", delId);
-              const loyaltySnap = await getDoc(loyaltyRef);
-              if (!loyaltySnap.exists()) {
-                await setDoc(loyaltyRef, {
-                  parcelId: delId,
-                  userId: uId,
-                  pointsAwarded: 15,
-                  awardedAt: Date.now(),
-                  verified: true
-                }, { merge: true });
-              }
-            }
           } catch (_) {}
         }
       }
 
-      addLog("Recalibrate Fleet", `Settings recalibration: ${resolvedCount} deliveries aligned, ${pinCount} PINs generated, ${syncCount} subcollections synced`);
-      addToast?.("success", `Recalibration finished: ${resolvedCount} deliveries aligned, ${pinCount} PINs generated, ${syncCount} subcollections synced.`);
+      addLog("Recalibrate Fleet", `Settings recalibration: ${resolvedCount} deliveries aligned, ${syncCount} subcollections synced`);
+      addToast?.("success", `Recalibration finished: ${resolvedCount} deliveries aligned, ${syncCount} subcollections synced.`);
     } catch (e: any) {
       addToast?.("error", "Recalibration failed: " + e.message);
     } finally {
@@ -8334,43 +8359,144 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
     }
     setSavingStaff(false);
   };
+
   useEffect(() => {
     const unsub = onSnapshot(doc(db, "system_config", "global_settings"), snap => {
       if (snap.exists()) {
         const d = snap.data();
-        // Never bind fcmServerKey from the shared (app-readable) doc - secrets live in admin_config only
         const { fcmServerKey: _, ...publicKeys } = d;
-        setSForm(publicKeys);
+        setSForm((prev: any) => ({ ...prev, ...publicKeys }));
       }
     });
+    getDoc(doc(db, "system_config", "pricing")).then(s => {
+      if (s.exists()) {
+        const d = s.data();
+        setSForm((prev: any) => ({
+          ...prev,
+          deliveryTypes: (d.deliveryTypes && Array.isArray(d.deliveryTypes) && d.deliveryTypes.length > 0) ? d.deliveryTypes : (prev.deliveryTypes || DEFAULT_DELIVERY_SERVICES),
+          baseFare: d.baseFare ?? prev.baseFare,
+          perKgRate: d.perKgRate ?? prev.perKgRate,
+          expressSurcharge: d.expressSurcharge ?? prev.expressSurcharge,
+          surgeMultiplier: d.surgeMultiplier ?? prev.surgeMultiplier,
+          discountEnabled: d.discountEnabled ?? prev.discountEnabled,
+          discountPercent: d.discountPercent ?? prev.discountPercent,
+        }));
+      }
+    }).catch(() => {});
     getDoc(doc(db, "admin_config", "fcm")).then(s => {
       if (s.exists() && (s.data() as any).fcmServerKey) setFcmKey((s.data() as any).fcmServerKey);
     }).catch(() => {});
     return unsub;
   }, []);
+
   const upd = (k: string, v: any) => setSForm((f: any) => ({ ...f, [k]: v }));
+
   const saveSettings = async (section?: string) => {
     setSaving(true);
-    const payload: any = { ...sForm, updatedAt: Timestamp.now() };
-    delete payload.fcmServerKey;
-    await setDoc(doc(db, "system_config", "global_settings"), payload, { merge: true });
-    if (fcmKey) await setDoc(doc(db, "admin_config", "fcm"), { fcmServerKey: fcmKey, updatedAt: Timestamp.now() }, { merge: true });
-    addLog("Update Settings", section || "General");
+    try {
+      const payload: any = { ...sForm, updatedAt: Timestamp.now() };
+      delete payload.fcmServerKey;
+
+      const currentTypes = (Array.isArray(sForm.deliveryTypes) && sForm.deliveryTypes.length > 0)
+        ? sForm.deliveryTypes
+        : DEFAULT_DELIVERY_SERVICES;
+      payload.deliveryTypes = currentTypes;
+
+      await setDoc(doc(db, "system_config", "global_settings"), payload, { merge: true });
+
+      // Synchronize core pricing matrix with system_config/pricing
+      const pricingPayload: any = {
+        deliveryTypes: currentTypes,
+        baseFare: Number(sForm.baseFare) || (currentTypes.find((t: any) => t.id === "economy")?.baseFare || 1000),
+        perKgRate: Number(sForm.perKgRate) || 50,
+        expressSurcharge: Number(sForm.expressSurcharge) || 500,
+        surgeMultiplier: Number(sForm.surgeMultiplier) || 1.0,
+        discountEnabled: !!sForm.discountEnabled,
+        discountPercent: Number(sForm.discountPercent) || 0,
+        updatedAt: Timestamp.now()
+      };
+      await setDoc(doc(db, "system_config", "pricing"), pricingPayload, { merge: true });
+
+      if (fcmKey) {
+        await setDoc(doc(db, "admin_config", "fcm"), { fcmServerKey: fcmKey, updatedAt: Timestamp.now() }, { merge: true });
+      }
+      addLog("Update Settings", section || "General");
+      addToast?.("success", section ? `${section} settings saved successfully` : "Settings synchronized across mobile and fleet.");
+    } catch (e: any) {
+      addToast?.("error", "Failed to save settings: " + e.message);
+    }
     setSaving(false);
   };
-  return <div className="tab-content space-y-6">
-    <div><h1 className="text-xl font-black text-[#111] dark:text-white flex items-center gap-2"><Settings2 className="w-5 h-5 text-[#FFB800]" /> Settings</h1>
-      <p className="text-xs text-gray-600 dark:text-gray-400 font-medium mt-1">System preferences and configuration</p></div>
 
-    {/* Section 1 — System Controls */}
+  const activeDeliveryTypes = (Array.isArray(sForm.deliveryTypes) && sForm.deliveryTypes.length > 0)
+    ? sForm.deliveryTypes
+    : DEFAULT_DELIVERY_SERVICES;
+
+  const currentSurge = Number(sForm.surgeMultiplier) || 1.0;
+  const currentDiscountPercent = sForm.discountEnabled ? (Number(sForm.discountPercent) || 0) : 0;
+  const discountFactor = 1.0 - (currentDiscountPercent / 100);
+
+  const calculateSampleFare = (serviceId: string) => {
+    const s = activeDeliveryTypes.find((t: any) => t.id === serviceId) || DEFAULT_DELIVERY_SERVICES.find(t => t.id === serviceId);
+    if (!s) return 0;
+    const base = Number(s.baseFare) || 1000;
+    const perKm = Number(s.perKm) || 80;
+    const perKg = Number(s.perKg) || 40;
+    const perExtraStop = Number(s.perExtraStop) || 0;
+
+    const distCharge = simDistance < 0.2 ? 0 : simDistance * perKm;
+    const wtCharge = simWeight > 2.0 ? (simWeight - 2.0) * perKg : 0;
+    const extraStops = (serviceId === "batch" || serviceId === "multi") ? Math.max(0, simStops - 1) : 0;
+    const stopsCharge = extraStops * perExtraStop;
+
+    const subtotal = base + distCharge + wtCharge + stopsCharge;
+    const total = subtotal * currentSurge * discountFactor;
+    return Math.max(base, Math.round(total / 50) * 50);
+  };
+
+  return <div className="tab-content space-y-6">
+    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-2 border-b border-gray-100 dark:border-white/10">
+      <div>
+        <h1 className="text-xl font-black text-[#111] dark:text-white flex items-center gap-2">
+          <Settings2 className="w-5 h-5 text-[#FFB800]" /> System Settings & Pricing
+        </h1>
+        <p className="text-xs text-gray-600 dark:text-gray-400 font-medium mt-0.5">
+          Master control center: platform controls, real service pricing, fleet rules, and administrative security.
+        </p>
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => saveSettings("Full System")}
+          className="px-4 py-2 bg-[#FFB800] hover:bg-[#FFB800]/90 text-[#111] rounded-xl text-xs font-black transition-all cursor-pointer shadow-xs disabled:opacity-50 flex items-center gap-1.5"
+        >
+          <Save className="w-3.5 h-3.5" />
+          <span>{saving ? "Synchronizing..." : "Save All Settings"}</span>
+        </button>
+      </div>
+    </div>
+
+    {/* Section 1 — Platform & Access Controls */}
     <div className="bg-white dark:bg-[#1a1a1a] border border-gray-200 dark:border-white/10 rounded-3xl p-5 shadow-xs space-y-4">
-      <div className="flex items-center gap-2 pb-1 border-b border-gray-100 dark:border-white/10"><Shield className="w-4 h-4 text-[#FFB800]" /><span className="text-xs font-black text-[#111] dark:text-white uppercase tracking-wide">System Controls</span></div>
+      <div className="flex items-center justify-between pb-2 border-b border-gray-100 dark:border-white/10">
+        <div className="flex items-center gap-2">
+          <Shield className="w-4 h-4 text-[#FFB800]" />
+          <span className="text-xs font-black text-[#111] dark:text-white uppercase tracking-wide">Section 1 — Platform & Access Controls</span>
+        </div>
+        <SaveBtn onClick={() => saveSettings("Platform Controls")} loading={saving} />
+      </div>
       <div className="grid sm:grid-cols-2 gap-3">
-        <Toggle label="Allow Signups" desc="Enable new user registration" checked={!!sForm.allowSignups} onChange={v => upd("allowSignups", v)} />
-        <Toggle label="Require Approval" desc="Admin must approve new accounts" checked={!!sForm.requireApproval} onChange={v => upd("requireApproval", v)} />
-        <Toggle label="Maintenance Mode" desc="Disable app access for users" checked={!!sForm.maintenanceMode} onChange={v => upd("maintenanceMode", v)} />
-        <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5 rounded-2xl"><div><p className="text-xs font-bold text-[#111] dark:text-white">Default Role</p></div>
-          <Select value={sForm.defaultRole || "customer"} onChange={v => upd("defaultRole", v)} options={[{value:"customer",label:"Customer"},{value:"rider",label:"Rider"},{value:"admin",label:"Admin"}]} className="w-36" /></div>
+        <Toggle label="Allow Signups" desc="Enable new customer and courier account registrations" checked={!!sForm.allowSignups} onChange={v => upd("allowSignups", v)} />
+        <Toggle label="Require Approval" desc="Admins must manually verify new rider and vendor registrations before activation" checked={!!sForm.requireApproval} onChange={v => upd("requireApproval", v)} />
+        <Toggle label="Maintenance Mode" desc="Disable customer booking and display a friendly maintenance notice" checked={!!sForm.maintenanceMode} onChange={v => upd("maintenanceMode", v)} />
+        <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5 rounded-2xl">
+          <div>
+            <p className="text-xs font-bold text-[#111] dark:text-white">Default Role</p>
+            <p className="text-[10px] text-gray-500">Assigned upon new account sign up</p>
+          </div>
+          <Select value={sForm.defaultRole || "customer"} onChange={v => upd("defaultRole", v)} options={[{value:"customer",label:"Customer"},{value:"rider",label:"Rider"},{value:"admin",label:"Admin"}]} className="w-36" />
+        </div>
         <div className="sm:col-span-2 flex flex-col gap-1 p-3 bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5 rounded-2xl">
           <label className="text-xs font-bold text-[#111] dark:text-white">Backend API / Serverless URL (Optional Override)</label>
           <input 
@@ -8383,35 +8509,349 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
           <p className="text-[10px] text-gray-500">Live hot-swap endpoint used by mobile apps for verification and serverless dispatches.</p>
         </div>
       </div>
-      <div className="flex justify-end pt-1"><SaveBtn onClick={() => saveSettings("System Controls")} loading={saving} /></div>
     </div>
 
-    {/* Section 2 — Feature Toggles */}
+    {/* Section 2 — Feature Toggles & Security Policies */}
     <div className="bg-white dark:bg-[#1a1a1a] border border-gray-200 dark:border-white/10 rounded-3xl p-5 shadow-xs space-y-4">
-      <div className="flex items-center gap-2 pb-1 border-b border-gray-100 dark:border-white/10"><Zap className="w-4 h-4 text-[#FFB800]" /><span className="text-xs font-black text-[#111] dark:text-white uppercase tracking-wide">Feature Toggles</span></div>
-      <div className="grid sm:grid-cols-2 gap-3">
-        <Toggle label="Marketplace & Vendor Stores" desc="Master switch: enable or hide all storefronts, shop carousels and vendor features on mobile app" checked={sForm.marketplaceEnabled !== false} onChange={v => upd("marketplaceEnabled", v)} />
-        <Toggle label="Points & Loyalty" desc="Bronze/Silver/Gold/Platinum tier system" checked={!!sForm.pointsAndLoyalty} onChange={v => { upd("pointsSystemEnabled", v); upd("pointsAndLoyalty", v); }} />
-        <Toggle label="Driver Tips" desc="Customers can add tips on delivery" checked={!!sForm.driverTipsEnabled} onChange={v => { upd("tipSystemEnabled", v); upd("driverTipsEnabled", v); }} />
-        <Toggle label="Auto-Verify Vendors" desc="Instantly approve vendor stores once KYC + delivery milestone are met" checked={!!sForm.autoVerifyVendors} onChange={v => upd("autoVerifyVendors", v)} />
-        <Toggle label="Referral System" desc="Referral rewards and invite codes" checked={!!sForm.referralEnabled} onChange={v => upd("referralEnabled", v)} />
-        <Toggle label="Dynamic Pricing" desc="Surge pricing based on demand" checked={!!sForm.dynamicPricing} onChange={v => upd("dynamicPricing", v)} />
-        <Toggle label="Require Email Verification (OTP Passcode)" desc="Require new and existing accounts to verify their email address via a 6-digit passcode before completing bookings" checked={!!sForm.emailVerificationRequired} onChange={v => upd("emailVerificationRequired", v)} />
-        <Toggle label="Require Unique Phone Number at Sign-Up" desc="Enforce real-time validation and strict phone uniqueness so no two accounts can share the same mobile number" checked={!!sForm.phoneVerificationRequired} onChange={v => upd("phoneVerificationRequired", v)} />
-        <Toggle label="QR Code Delivery Handover" desc="Display QR code alongside 4-digit PIN for parcel handover verification (disabled by default for direct PIN entry)" checked={!!sForm.enableQrCodeHandover} onChange={v => upd("enableQrCodeHandover", v)} />
-        <Toggle label="Delivery Signature Verification" desc="Require customer digital signature after capturing mandatory photo proof (OFF by default — photo proof is always required)" checked={!!sForm.signatureVerificationEnabled} onChange={v => upd("signatureVerificationEnabled", v)} />
+      <div className="flex items-center justify-between pb-2 border-b border-gray-100 dark:border-white/10">
+        <div className="flex items-center gap-2">
+          <Zap className="w-4 h-4 text-[#FFB800]" />
+          <span className="text-xs font-black text-[#111] dark:text-white uppercase tracking-wide">Section 2 — Feature Toggles & Operational Policies</span>
+        </div>
+        <SaveBtn onClick={() => saveSettings("Feature Policies")} loading={saving} />
       </div>
-      <div className="flex justify-end pt-1"><SaveBtn onClick={() => saveSettings("Feature Toggles")} loading={saving} /></div>
+      <div className="grid sm:grid-cols-2 gap-3">
+        <Toggle label="Marketplace & Vendor Stores" desc="Master switch: enable or hide vendor storefronts, gear shop, and merchant carousels on mobile app" checked={sForm.marketplaceEnabled !== false} onChange={v => upd("marketplaceEnabled", v)} />
+        <Toggle label="Driver Tip System" desc="Customers can award digital tips to couriers on delivery completion" checked={!!sForm.driverTipsEnabled} onChange={v => { upd("tipSystemEnabled", v); upd("driverTipsEnabled", v); }} />
+        <Toggle label="Dynamic Surge Pricing" desc="Activate automated peak-hour or weather multiplier on base fares" checked={!!sForm.dynamicPricing} onChange={v => upd("dynamicPricing", v)} />
+        <Toggle label="Auto-Verify Vendors" desc="Automatically approve vendor storefronts once KYC registration is submitted" checked={!!sForm.autoVerifyVendors} onChange={v => upd("autoVerifyVendors", v)} />
+        <Toggle label="Referral System" desc="Reward users and track referral invite codes" checked={!!sForm.referralEnabled} onChange={v => upd("referralEnabled", v)} />
+        <Toggle label="Points & Loyalty Rewards" desc="Award loyalty points on every completed delivery" checked={!!sForm.pointsAndLoyalty} onChange={v => { upd("pointsSystemEnabled", v); upd("pointsAndLoyalty", v); }} />
+        <Toggle label="Require Email Verification (Passcode)" desc="Require 6-digit email passcode verification before booking dispatches" checked={!!sForm.emailVerificationRequired} onChange={v => upd("emailVerificationRequired", v)} />
+        <Toggle label="Require Unique Phone Number" desc="Enforce unique mobile number per account on registration" checked={!!sForm.phoneVerificationRequired} onChange={v => upd("phoneVerificationRequired", v)} />
+        <Toggle label="QR Code Handover Option" desc="Display QR code alongside 4-digit arrival PIN for parcel handover" checked={!!sForm.enableQrCodeHandover} onChange={v => upd("enableQrCodeHandover", v)} />
+        <Toggle label="Delivery Signature Verification" desc="Require digital recipient signature alongside mandatory photo proof" checked={!!sForm.signatureVerificationEnabled} onChange={v => upd("signatureVerificationEnabled", v)} />
+      </div>
     </div>
 
-    {/* Section 2b — Courier Fleet & Working Days Controls */}
+    {/* Section 3 — Core Service Delivery & Pricing Matrix */}
     <div className="bg-white dark:bg-[#1a1a1a] border border-gray-200 dark:border-white/10 rounded-3xl p-5 shadow-xs space-y-4">
-      <div className="flex items-center gap-2 pb-1 border-b border-gray-100 dark:border-white/10">
-        <Bike className="w-4 h-4 text-[#FFB800]" />
-        <span className="text-xs font-black text-[#111] dark:text-white uppercase tracking-wide">Fleet Operations & Working Days</span>
+      <div className="flex items-center justify-between pb-2 border-b border-gray-100 dark:border-white/10">
+        <div className="flex items-center gap-2">
+          <Truck className="w-4 h-4 text-[#FFB800]" />
+          <div>
+            <span className="text-xs font-black text-[#111] dark:text-white uppercase tracking-wide">Section 3 — Core Service Delivery & Pricing Matrix</span>
+            <p className="text-[10px] text-gray-500 dark:text-gray-400 font-medium">Real dispatch pricing for the 4 official app services. Changes immediately sync to mobile quotes.</p>
+          </div>
+        </div>
+        <SaveBtn onClick={() => saveSettings("Pricing Matrix")} loading={saving} />
+      </div>
+
+      <div className="overflow-x-auto rounded-2xl border border-gray-200 dark:border-white/10">
+        <table className="w-full text-xs">
+          <thead className="bg-gray-50 dark:bg-[#222]">
+            <tr>
+              <th className="p-3 text-left font-extrabold text-gray-600 dark:text-gray-400 uppercase tracking-wider text-[10px] w-12">Active</th>
+              <th className="p-3 text-left font-extrabold text-gray-600 dark:text-gray-400 uppercase tracking-wider text-[10px]">Service</th>
+              <th className="p-3 text-right font-extrabold text-gray-600 dark:text-gray-400 uppercase tracking-wider text-[10px] w-24">Base Fare (₦)</th>
+              <th className="p-3 text-right font-extrabold text-gray-600 dark:text-gray-400 uppercase tracking-wider text-[10px] w-20">/km (₦)</th>
+              <th className="p-3 text-right font-extrabold text-gray-600 dark:text-gray-400 uppercase tracking-wider text-[10px] w-20">/kg (₦)</th>
+              <th className="p-3 text-right font-extrabold text-gray-600 dark:text-gray-400 uppercase tracking-wider text-[10px] w-28">Extra Stop (₦)</th>
+              <th className="p-3 text-left font-extrabold text-gray-600 dark:text-gray-400 uppercase tracking-wider text-[10px] hidden md:table-cell">Operational Role</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100 dark:divide-white/10">
+            {activeDeliveryTypes.map((t: any, i: number) => {
+              const isMultiOrBatch = t.id === "batch" || t.id === "multi";
+              return (
+                <tr key={t.id} className={"hover:bg-black/5 dark:hover:bg-white/5 transition-colors " + (t.enabled ? "" : "opacity-50")}>
+                  <td className="p-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const dts = [...activeDeliveryTypes];
+                        dts[i] = { ...dts[i], enabled: !dts[i].enabled };
+                        upd("deliveryTypes", dts);
+                      }}
+                      className={"w-8 h-4 rounded-full transition-colors relative cursor-pointer " + (t.enabled ? "bg-emerald-500" : "bg-gray-300 dark:bg-gray-600")}
+                    >
+                      <span className={"absolute top-0.5 w-3 h-3 bg-white rounded-full shadow-xs transition-transform " + (t.enabled ? "translate-x-[18px]" : "translate-x-0.5")} />
+                    </button>
+                  </td>
+                  <td className="p-3">
+                    <p className="font-black text-xs text-[#111] dark:text-white">{t.name}</p>
+                    <span className="text-[10px] font-mono font-bold text-[#FFB800] uppercase tracking-wider">{t.id}</span>
+                  </td>
+                  <td className="p-3">
+                    <input
+                      type="number"
+                      value={t.baseFare ?? ""}
+                      onChange={e => {
+                        const dts = [...activeDeliveryTypes];
+                        dts[i] = { ...dts[i], baseFare: parseFloat(e.target.value) || 0 };
+                        upd("deliveryTypes", dts);
+                        if (t.id === "economy") upd("baseFare", parseFloat(e.target.value) || 0);
+                      }}
+                      className="w-full text-right bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-[#111] dark:text-white font-bold focus:ring-1 focus:ring-[#FFB800] focus:outline-none"
+                    />
+                  </td>
+                  <td className="p-3">
+                    <input
+                      type="number"
+                      value={t.perKm ?? ""}
+                      onChange={e => {
+                        const dts = [...activeDeliveryTypes];
+                        dts[i] = { ...dts[i], perKm: parseFloat(e.target.value) || 0 };
+                        upd("deliveryTypes", dts);
+                      }}
+                      className="w-full text-right bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-[#111] dark:text-white font-bold focus:ring-1 focus:ring-[#FFB800] focus:outline-none"
+                    />
+                  </td>
+                  <td className="p-3">
+                    <input
+                      type="number"
+                      value={t.perKg ?? ""}
+                      onChange={e => {
+                        const dts = [...activeDeliveryTypes];
+                        dts[i] = { ...dts[i], perKg: parseFloat(e.target.value) || 0 };
+                        upd("deliveryTypes", dts);
+                        if (t.id === "economy") upd("perKgRate", parseFloat(e.target.value) || 0);
+                      }}
+                      className="w-full text-right bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-[#111] dark:text-white font-bold focus:ring-1 focus:ring-[#FFB800] focus:outline-none"
+                    />
+                  </td>
+                  <td className="p-3">
+                    {isMultiOrBatch ? (
+                      <input
+                        type="number"
+                        value={t.perExtraStop ?? (t.id === "batch" ? 500 : 800)}
+                        onChange={e => {
+                          const dts = [...activeDeliveryTypes];
+                          dts[i] = { ...dts[i], perExtraStop: parseFloat(e.target.value) || 0 };
+                          upd("deliveryTypes", dts);
+                        }}
+                        className="w-full text-right bg-amber-500/10 border border-amber-500/30 rounded-xl px-2.5 py-1.5 text-xs text-[#111] dark:text-white font-bold focus:ring-1 focus:ring-[#FFB800] focus:outline-none"
+                      />
+                    ) : (
+                      <span className="text-gray-400 text-[11px] block text-right font-medium">Single Point</span>
+                    )}
+                  </td>
+                  <td className="p-3 hidden md:table-cell">
+                    <p className="text-[11px] text-gray-600 dark:text-gray-400 font-medium">{t.description}</p>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Global Modifiers */}
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2">
+        <div className="p-3 bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5 rounded-2xl">
+          <label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">
+            Dynamic Surge Multiplier (×)
+          </label>
+          <input
+            type="number"
+            step="0.05"
+            min="1.0"
+            max="3.0"
+            value={sForm.surgeMultiplier ?? 1.0}
+            onChange={e => upd("surgeMultiplier", parseFloat(e.target.value) || 1.0)}
+            className="w-full h-10 bg-white dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 text-xs text-[#111] dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-[#FFB800]/40"
+          />
+          <p className="text-[10px] text-gray-500 mt-1">1.0 = Standard • 1.2 = Rain/Peak • 1.5 = Extreme Demand</p>
+        </div>
+
+        <div className="p-3 bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5 rounded-2xl">
+          <label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">
+            Express Priority Surcharge (₦)
+          </label>
+          <input
+            type="number"
+            value={sForm.expressSurcharge ?? 500}
+            onChange={e => upd("expressSurcharge", parseFloat(e.target.value) || 0)}
+            className="w-full h-10 bg-white dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 text-xs text-[#111] dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-[#FFB800]/40"
+          />
+          <p className="text-[10px] text-gray-500 mt-1">Express surcharge applied for VIP instant pickup</p>
+        </div>
+
+        <div className="p-3 bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5 rounded-2xl">
+          <label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">
+            Promotional Discount (%)
+          </label>
+          <input
+            type="number"
+            min="0"
+            max="70"
+            value={sForm.discountPercent ?? 15}
+            onChange={e => upd("discountPercent", parseInt(e.target.value) || 0)}
+            className="w-full h-10 bg-white dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 text-xs text-[#111] dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-[#FFB800]/40"
+          />
+          <p className="text-[10px] text-gray-500 mt-1">Global marketing savings badge for customers</p>
+        </div>
+
+        <div className="flex flex-col justify-center p-3 bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5 rounded-2xl">
+          <Toggle
+            label="Promotional Discount Active"
+            desc="Enable discounted rates across mobile apps"
+            checked={!!sForm.discountEnabled}
+            onChange={v => upd("discountEnabled", v)}
+          />
+        </div>
+      </div>
+
+      {/* Live Fare Simulator */}
+      <div className="p-4 bg-gradient-to-br from-amber-500/10 via-transparent to-amber-500/5 border border-[#FFB800]/20 rounded-2xl space-y-3">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="w-4 h-4 text-[#FFB800]" />
+            <h4 className="text-xs font-black text-[#111] dark:text-white uppercase tracking-wide">
+              Live Fare Simulator (Benin City)
+            </h4>
+          </div>
+          <span className="text-[10px] font-bold text-gray-500 dark:text-gray-400">
+            Current Surge: {currentSurge}x {sForm.discountEnabled ? `• ${currentDiscountPercent}% Promo Active` : ""}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <label className="block text-[10px] font-bold text-gray-600 dark:text-gray-400 mb-1">Trip Distance (km)</label>
+            <input
+              type="number"
+              min="0"
+              step="0.5"
+              value={simDistance}
+              onChange={e => setSimDistance(Math.max(0, parseFloat(e.target.value) || 0))}
+              className="w-full h-9 bg-white dark:bg-[#111] border border-gray-200 dark:border-white/10 rounded-xl px-3 text-xs text-[#111] dark:text-white font-bold focus:outline-none focus:border-[#FFB800]"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] font-bold text-gray-600 dark:text-gray-400 mb-1">Parcel Weight (kg)</label>
+            <input
+              type="number"
+              min="1"
+              step="0.5"
+              value={simWeight}
+              onChange={e => setSimWeight(Math.max(1, parseFloat(e.target.value) || 1))}
+              className="w-full h-9 bg-white dark:bg-[#111] border border-gray-200 dark:border-white/10 rounded-xl px-3 text-xs text-[#111] dark:text-white font-bold focus:outline-none focus:border-[#FFB800]"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] font-bold text-gray-600 dark:text-gray-400 mb-1">Stops / Packages</label>
+            <input
+              type="number"
+              min="1"
+              max="20"
+              value={simStops}
+              onChange={e => setSimStops(Math.max(1, parseInt(e.target.value) || 1))}
+              className="w-full h-9 bg-white dark:bg-[#111] border border-gray-200 dark:border-white/10 rounded-xl px-3 text-xs text-[#111] dark:text-white font-bold focus:outline-none focus:border-[#FFB800]"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 pt-1">
+          <div className="p-3 bg-white dark:bg-[#111] border border-gray-200 dark:border-white/10 rounded-xl text-center">
+            <p className="text-[10px] font-extrabold text-gray-500 uppercase">Express Quote</p>
+            <p className="text-base font-black text-[#FFB800] mt-0.5">₦{calculateSampleFare("express").toLocaleString()}</p>
+            <p className="text-[9px] text-gray-400 font-medium">{simDistance}km point-to-point</p>
+          </div>
+          <div className="p-3 bg-white dark:bg-[#111] border border-gray-200 dark:border-white/10 rounded-xl text-center">
+            <p className="text-[10px] font-extrabold text-gray-500 uppercase">Economy Quote</p>
+            <p className="text-base font-black text-emerald-500 mt-0.5">₦{calculateSampleFare("economy").toLocaleString()}</p>
+            <p className="text-[9px] text-gray-400 font-medium">{simDistance}km standard dispatch</p>
+          </div>
+          <div className="p-3 bg-white dark:bg-[#111] border border-gray-200 dark:border-white/10 rounded-xl text-center">
+            <p className="text-[10px] font-extrabold text-gray-500 uppercase">Batch Quote ({simStops} pkgs)</p>
+            <p className="text-base font-black text-[#111] dark:text-white mt-0.5">₦{calculateSampleFare("batch").toLocaleString()}</p>
+            <p className="text-[9px] text-gray-400 font-medium">~₦{Math.round(calculateSampleFare("batch") / simStops).toLocaleString()}/package</p>
+          </div>
+          <div className="p-3 bg-white dark:bg-[#111] border border-gray-200 dark:border-white/10 rounded-xl text-center">
+            <p className="text-[10px] font-extrabold text-gray-500 uppercase">Multi-Stop ({simStops} stops)</p>
+            <p className="text-base font-black text-[#111] dark:text-white mt-0.5">₦{calculateSampleFare("multi").toLocaleString()}</p>
+            <p className="text-[9px] text-gray-400 font-medium">{simDistance}km total circuit</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {/* Section 4 — Points, Loyalty & Gamification */}
+    <div className="bg-white dark:bg-[#1a1a1a] border border-gray-200 dark:border-white/10 rounded-3xl p-5 shadow-xs space-y-4">
+      <div className="flex items-center justify-between pb-2 border-b border-gray-100 dark:border-white/10">
+        <div className="flex items-center gap-2">
+          <Award className="w-4 h-4 text-[#FFB800]" />
+          <span className="text-xs font-black text-[#111] dark:text-white uppercase tracking-wide">Section 4 — Points, Loyalty & Gamification</span>
+        </div>
+        <SaveBtn onClick={() => saveSettings("Points & Loyalty")} loading={saving} />
+      </div>
+      <p className="text-[10px] text-gray-600 dark:text-gray-400 font-medium">Configure customer loyalty tiers, daily login rewards, and referral credits.</p>
+
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Toggle label="Points System Active" desc="" checked={!!(sForm.appContent?.loyalty?.active ?? sForm.pointsAndLoyalty)} onChange={v => upd("appContent", { ...(sForm.appContent || {}), loyalty: { ...(sForm.appContent?.loyalty || {}), active: v } })} />
+        <Toggle label="Daily Bonus" desc="" checked={!!(sForm.appContent?.loyalty?.dailyBonusEnabled ?? true)} onChange={v => upd("appContent", { ...(sForm.appContent || {}), loyalty: { ...(sForm.appContent?.loyalty || {}), dailyBonusEnabled: v } })} />
+      </div>
+
+      <div className="text-xs font-bold text-[#111] dark:text-white pt-2">Loyalty Tier Thresholds (Cumulative Orders)</div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div><label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Bronze Tier</label>
+          <input type="number" value={sForm.appContent?.loyalty?.bronzeThreshold ?? 3} onChange={e => upd("appContent", { ...(sForm.appContent || {}), loyalty: { ...(sForm.appContent?.loyalty || {}), bronzeThreshold: parseInt(e.target.value) || 3 } })}
+            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" /></div>
+        <div><label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Silver Tier</label>
+          <input type="number" value={sForm.appContent?.loyalty?.silverThreshold ?? 10} onChange={e => upd("appContent", { ...(sForm.appContent || {}), loyalty: { ...(sForm.appContent?.loyalty || {}), silverThreshold: parseInt(e.target.value) || 10 } })}
+            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" /></div>
+        <div><label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Gold Tier</label>
+          <input type="number" value={sForm.appContent?.loyalty?.goldThreshold ?? 25} onChange={e => upd("appContent", { ...(sForm.appContent || {}), loyalty: { ...(sForm.appContent?.loyalty || {}), goldThreshold: parseInt(e.target.value) || 25 } })}
+            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" /></div>
+        <div><label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Platinum Tier</label>
+          <input type="number" value={sForm.appContent?.loyalty?.platinumThreshold ?? 50} onChange={e => upd("appContent", { ...(sForm.appContent || {}), loyalty: { ...(sForm.appContent?.loyalty || {}), platinumThreshold: parseInt(e.target.value) || 50 } })}
+            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" /></div>
+      </div>
+
+      <div className="grid sm:grid-cols-3 gap-4 pt-2">
+        <div><label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Daily Login Points</label>
+          <input type="number" value={sForm.appContent?.loyalty?.dailyBonus ?? 10} onChange={e => upd("appContent", { ...(sForm.appContent || {}), loyalty: { ...(sForm.appContent?.loyalty || {}), dailyBonus: parseInt(e.target.value) || 10 } })}
+            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" /></div>
+        <div><label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Welcome Gift (₦)</label>
+          <input type="number" value={sForm.appContent?.welcomeGift?.credit ?? 2500} onChange={e => upd("appContent", { ...(sForm.appContent || {}), welcomeGift: { ...(sForm.appContent?.welcomeGift || {}), credit: parseFloat(e.target.value) || 0 } })}
+            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" /></div>
+        <div><label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Referral Reward (₦)</label>
+          <input type="number" value={sForm.referralReward ?? 500} onChange={e => upd("referralReward", parseFloat(e.target.value) || 0)}
+            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" /></div>
+      </div>
+
+      <div className="text-xs font-bold text-[#111] dark:text-white pt-3 border-t border-gray-100 dark:border-white/10">Rider Performance Targets & Incentives</div>
+      <div className="grid sm:grid-cols-3 gap-4">
+        <div>
+          <label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Daily Target Trips (per rider)</label>
+          <input type="number" min="1" value={sForm.dailyRiderTargetRides ?? 5} onChange={e => upd("dailyRiderTargetRides", parseInt(e.target.value) || 5)}
+            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" />
+        </div>
+        <div>
+          <label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Target Bonus Points</label>
+          <input type="number" min="0" value={sForm.dailyRiderTargetPoints ?? 50} onChange={e => upd("dailyRiderTargetPoints", parseInt(e.target.value) || 50)}
+            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" />
+        </div>
+        <div>
+          <label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Point Naira Value (₦ per pt)</label>
+          <input type="number" min="1" value={sForm.pointNairaValue ?? 10} onChange={e => upd("pointNairaValue", parseInt(e.target.value) || 10)}
+            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" />
+        </div>
+      </div>
+    </div>
+
+    {/* Section 5 — Fleet Operations & Maintenance */}
+    <div className="bg-white dark:bg-[#1a1a1a] border border-gray-200 dark:border-white/10 rounded-3xl p-5 shadow-xs space-y-4">
+      <div className="flex items-center justify-between pb-2 border-b border-gray-100 dark:border-white/10">
+        <div className="flex items-center gap-2">
+          <Bike className="w-4 h-4 text-[#FFB800]" />
+          <span className="text-xs font-black text-[#111] dark:text-white uppercase tracking-wide">Section 5 — Fleet Operations & Maintenance</span>
+        </div>
+        <SaveBtn onClick={() => saveSettings("Fleet Operations")} loading={saving} />
       </div>
       <p className="text-[11px] text-gray-600 dark:text-gray-400 font-medium">
-        Configure official company dispatch working days. Couriers are automatically placed online on active days to receive bookings and proximity match requests.
+        Configure official company dispatch shifts, working days, and in-flight delivery maintenance tools.
       </p>
 
       <div>
@@ -8458,232 +8898,59 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
         />
       </div>
 
-      <div className="flex justify-end pt-1">
-        <SaveBtn onClick={() => saveSettings("Fleet Operations & Working Days")} loading={saving} />
+      <div className="pt-2 border-t border-gray-100 dark:border-white/10 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl">
+          <div>
+            <p className="text-xs font-bold text-[#111] dark:text-white">In-Flight Delivery & Client Mirror Sync</p>
+            <p className="text-[11px] text-gray-500 dark:text-gray-400 font-medium mt-0.5">
+              Resolve deliveries stuck in transit, generate missing PINs, and reconcile client cache records.
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={recalibratingSettings}
+            onClick={handleSettingsRecalibration}
+            className="px-4 py-2.5 bg-[#FFB800] hover:bg-[#FFB800]/80 text-[#111] rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50 shrink-0"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${recalibratingSettings ? "animate-spin" : ""}`} />
+            {recalibratingSettings ? "Recalibrating..." : "Recalibrate Fleet Now"}
+          </button>
+        </div>
+
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl">
+          <div>
+            <p className="text-xs font-bold text-[#111] dark:text-white">Purge & Clean Up Legacy User Accounts</p>
+            <p className="text-[11px] text-gray-500 dark:text-gray-400 font-medium mt-0.5">
+              Normalize missing wallet balances, loyalty points, and courier stats so old accounts experience all new features seamlessly.
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={purgingSettings}
+            onClick={handleSettingsPurgeUsers}
+            className="px-4 py-2.5 bg-[#FFB800] hover:bg-[#FFB800]/80 text-[#111] rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50 shrink-0"
+          >
+            <Sparkles className={`w-3.5 h-3.5 ${purgingSettings ? "animate-spin" : ""}`} />
+            {purgingSettings ? "Purging..." : "Purge & Upgrade Old Users"}
+          </button>
+        </div>
       </div>
     </div>
 
-    {/* Section 2c — System Recalibration & Fleet Maintenance */}
+    {/* Section 6 — Brand Identity & Public Channels */}
     <div className="bg-white dark:bg-[#1a1a1a] border border-gray-200 dark:border-white/10 rounded-3xl p-5 shadow-xs space-y-4">
-      <div className="flex items-center gap-2 pb-1 border-b border-gray-100 dark:border-white/10">
-        <RefreshCw className="w-4 h-4 text-[#FFB800]" />
-        <span className="text-xs font-black text-[#111] dark:text-white uppercase tracking-wide">System Recalibration & Fleet Maintenance</span>
-      </div>
-      <p className="text-[11px] text-gray-600 dark:text-gray-400 font-medium">
-        Audit and synchronize in-flight deliveries, customer subcollection mirrors, and legacy handover PINs across mobile app version rollouts.
-      </p>
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl">
-        <div>
-          <p className="text-xs font-bold text-[#111] dark:text-white">In-Flight Delivery & Client Mirror Sync</p>
-          <p className="text-[11px] text-gray-500 dark:text-gray-400 font-medium mt-0.5">
-            Resolve deliveries stuck in transit, generate missing PINs, and reconcile client cache records.
-          </p>
+      <div className="flex items-center justify-between pb-2 border-b border-gray-100 dark:border-white/10">
+        <div className="flex items-center gap-2">
+          <Globe className="w-4 h-4 text-[#FFB800]" />
+          <span className="text-xs font-black text-[#111] dark:text-white uppercase tracking-wide">Section 6 — Brand Identity & Public Channels</span>
         </div>
-        <button
-          type="button"
-          disabled={recalibratingSettings}
-          onClick={handleSettingsRecalibration}
-          className="px-4 py-2.5 bg-[#FFB800] hover:bg-[#FFB800]/80 text-[#111] rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50 shrink-0"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${recalibratingSettings ? "animate-spin" : ""}`} />
-          {recalibratingSettings ? "Recalibrating..." : "Recalibrate Fleet Now"}
-        </button>
+        <SaveBtn onClick={() => saveSettings("Brand Identity")} loading={saving} />
       </div>
-
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl">
-        <div>
-          <p className="text-xs font-bold text-[#111] dark:text-white">Purge & Clean Up Legacy User Accounts</p>
-          <p className="text-[11px] text-gray-500 dark:text-gray-400 font-medium mt-0.5">
-            Normalize missing wallet balances, loyalty points, and courier stats so old accounts experience all new features and updates seamlessly.
-          </p>
-        </div>
-        <button
-          type="button"
-          disabled={purgingSettings}
-          onClick={handleSettingsPurgeUsers}
-          className="px-4 py-2.5 bg-[#FFB800] hover:bg-[#FFB800]/80 text-[#111] rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50 shrink-0"
-        >
-          <Sparkles className={`w-3.5 h-3.5 ${purgingSettings ? "animate-spin" : ""}`} />
-          {purgingSettings ? "Purging..." : "Purge & Upgrade Old Users"}
-        </button>
-      </div>
-    </div>
-
-    {/* Section 3 — Delivery Types */}
-    <div className="bg-white dark:bg-[#1a1a1a] border border-gray-200 dark:border-white/10 rounded-3xl p-5 shadow-xs space-y-4">
-      <div className="flex items-center gap-2 pb-1 border-b border-gray-100 dark:border-white/10"><Truck className="w-4 h-4 text-[#FFB800]" /><span className="text-xs font-black text-[#111] dark:text-white uppercase tracking-wide">Delivery Types</span></div>
-      <p className="text-[10px] text-gray-600 dark:text-gray-400 font-medium">Manage delivery categories — rename, enable/disable, set per-type pricing</p>
-      <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-white/10">
-        <table className="w-full text-xs">
-          <thead className="bg-gray-50 dark:bg-[#222]">
-            <tr>
-              <th className="p-2 text-left font-extrabold text-gray-600 dark:text-gray-400 uppercase tracking-wider text-[10px] w-10">On</th>
-              <th className="p-2 text-left font-extrabold text-gray-600 dark:text-gray-400 uppercase tracking-wider text-[10px]">Name</th>
-              <th className="p-2 text-left font-extrabold text-gray-600 dark:text-gray-400 uppercase tracking-wider text-[10px] hidden md:table-cell">Desc</th>
-              <th className="p-2 text-right font-extrabold text-gray-600 dark:text-gray-400 uppercase tracking-wider text-[10px] w-20">Base (₦)</th>
-              <th className="p-2 text-right font-extrabold text-gray-600 dark:text-gray-400 uppercase tracking-wider text-[10px] w-16">/km</th>
-              <th className="p-2 text-right font-extrabold text-gray-600 dark:text-gray-400 uppercase tracking-wider text-[10px] w-16">/kg</th>
-              <th className="p-2 w-8"></th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100 dark:divide-white/10">
-            {(() => {
-              const defaults = [
-                { id: "standard", name: "Standard", enabled: true, baseFare: 1000, perKm: 100, perKg: 50, description: "Regular delivery within 24hrs" },
-                { id: "express", name: "Express", enabled: true, baseFare: 2500, perKm: 200, perKg: 80, description: "Same-day priority delivery" },
-                { id: "economy", name: "Economy", enabled: true, baseFare: 700, perKm: 60, perKg: 30, description: "Budget-friendly 48hr delivery" },
-                { id: "coldchain", name: "Cold Chain", enabled: true, baseFare: 3000, perKm: 250, perKg: 100, description: "Temperature-controlled transport" },
-                { id: "batch", name: "Batch", enabled: true, baseFare: 5000, perKm: 150, perKg: 40, description: "Multiple packages same route" },
-                { id: "multi", name: "Multi-Stop", enabled: true, baseFare: 4000, perKm: 180, perKg: 60, description: "Multiple drop-off points" },
-              ];
-              const activeTypes = sForm.deliveryTypes || defaults;
-              if (!sForm.deliveryTypes) setTimeout(() => upd("deliveryTypes", defaults), 0);
-              return activeTypes.map((t: any, i: number) => (
-                <tr key={t.id} className={"hover:bg-black/5 dark:hover:bg-white/5 transition-colors " + (t.enabled ? "" : "opacity-50")}>
-                  <td className="p-2">
-                    <button onClick={() => { const dts = [...activeTypes]; dts[i] = { ...dts[i], enabled: !dts[i].enabled }; upd("deliveryTypes", dts); }}
-                      className={"w-8 h-4 rounded-full transition-colors relative cursor-pointer " + (t.enabled ? "bg-green-500" : "bg-gray-300 dark:bg-gray-600")}>
-                      <span className={"absolute top-0.5 w-3 h-3 bg-white rounded-full shadow-xs transition-transform " + (t.enabled ? "translate-x-[18px]" : "translate-x-0.5")} />
-                    </button>
-                  </td>
-                  <td className="p-2">
-                    <input value={t.name} onChange={e => { const dts = [...activeTypes]; dts[i] = { ...dts[i], name: e.target.value }; upd("deliveryTypes", dts); }}
-                      className="w-full bg-transparent text-xs font-bold text-[#111] dark:text-white border-b border-dashed border-transparent focus:border-[#FFB800] focus:outline-none" />
-                  </td>
-                  <td className="p-2 hidden md:table-cell">
-                    <input value={t.description || ""} onChange={e => { const dts = [...activeTypes]; dts[i] = { ...dts[i], description: e.target.value }; upd("deliveryTypes", dts); }}
-                      className="w-full bg-transparent text-[10px] text-gray-600 dark:text-gray-400 border-b border-dashed border-transparent focus:border-black/20 dark:focus:border-white/20 focus:outline-none placeholder-gray-400 dark:placeholder-gray-500" placeholder="Description" />
-                  </td>
-                  <td className="p-2">
-                    <input type="number" value={t.baseFare ?? ""} onChange={e => { const dts = [...activeTypes]; dts[i] = { ...dts[i], baseFare: parseFloat(e.target.value) || 0 }; upd("deliveryTypes", dts); }}
-                      className="w-full text-right bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-lg px-1.5 py-1 text-[10px] text-[#111] dark:text-white font-medium" />
-                  </td>
-                  <td className="p-2">
-                    <input type="number" value={t.perKm ?? ""} onChange={e => { const dts = [...activeTypes]; dts[i] = { ...dts[i], perKm: parseFloat(e.target.value) || 0 }; upd("deliveryTypes", dts); }}
-                      className="w-full text-right bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-lg px-1.5 py-1 text-[10px] text-[#111] dark:text-white font-medium" />
-                  </td>
-                  <td className="p-2">
-                    <input type="number" value={t.perKg ?? ""} onChange={e => { const dts = [...activeTypes]; dts[i] = { ...dts[i], perKg: parseFloat(e.target.value) || 0 }; upd("deliveryTypes", dts); }}
-                      className="w-full text-right bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-lg px-1.5 py-1 text-[10px] text-[#111] dark:text-white font-medium" />
-                  </td>
-                  <td className="p-2">
-                    <button onClick={() => { const dts = [...activeTypes]; dts.splice(i, 1); upd("deliveryTypes", dts); }}
-                      className="text-red-500 hover:text-red-700 transition-colors p-1 cursor-pointer"><X className="w-3.5 h-3.5" /></button>
-                  </td>
-                </tr>
-              ));
-            })()}
-          </tbody>
-        </table>
-      </div>
-      <button onClick={() => {
-        const dts = [...(sForm.deliveryTypes || [])];
-        const newId = "custom" + (dts.length + 1);
-        dts.push({ id: newId, name: "New Type", enabled: true, baseFare: 1000, perKm: 100, perKg: 50, description: "" });
-        upd("deliveryTypes", dts);
-      }} className="text-[10px] font-extrabold text-amber-800 dark:text-[#FFB800] hover:text-amber-900 dark:hover:text-[#e6b13b] flex items-center gap-1 cursor-pointer"><Plus className="w-3 h-3" /> Add Type</button>
-      <div className="flex justify-end pt-1"><SaveBtn onClick={() => saveSettings("Delivery Types")} loading={saving} /></div>
-    </div>
-
-    {/* Section 4 — Pricing */}
-    <div className="bg-white dark:bg-[#1a1a1a] border border-gray-200 dark:border-white/10 rounded-3xl p-5 shadow-xs space-y-4">
-      <div className="flex items-center gap-2 pb-1 border-b border-gray-100 dark:border-white/10"><DollarSign className="w-4 h-4 text-[#FFB800]" /><span className="text-xs font-black text-[#111] dark:text-white uppercase tracking-wide">Pricing</span></div>
-      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">BASE FARE (₦)</label>
-          <input type="number" value={sForm.baseFare ?? ""} onChange={e => upd("baseFare", parseFloat(e.target.value) || 0)} className="w-full h-10 bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3.5 text-xs text-[#111] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#FFB800]/40" /></div>
-        <div><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">PER KG RATE (₦)</label>
-          <input type="number" step="0.1" value={sForm.perKgRate ?? ""} onChange={e => upd("perKgRate", parseFloat(e.target.value) || 0)} className="w-full h-10 bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3.5 text-xs text-[#111] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#FFB800]/40" /></div>
-        <div><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">EXPRESS SURCHARGE (₦)</label>
-          <input type="number" value={sForm.expressSurcharge ?? ""} onChange={e => upd("expressSurcharge", parseFloat(e.target.value) || 0)} className="w-full h-10 bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3.5 text-xs text-[#111] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#FFB800]/40" /></div>
-        <div><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">SURGE MULTIPLIER (Ã—)</label>
-          <input type="number" step="0.1" min="1" value={sForm.surgeMultiplier ?? ""} onChange={e => upd("surgeMultiplier", parseFloat(e.target.value) || 1)} className="w-full h-10 bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3.5 text-xs text-[#111] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#FFB800]/40" /></div>
-      </div>
-      <div className="flex justify-end pt-1"><SaveBtn onClick={() => saveSettings("Pricing")} loading={saving} /></div>
-    </div>
-
-    {/* Section 4 — Points & Rewards Configuration */}
-    <div className="bg-white dark:bg-[#1a1a1a] border border-gray-200 dark:border-white/10 rounded-3xl p-5 shadow-xs space-y-4">
-      <div className="flex items-center gap-2 pb-1 border-b border-gray-100 dark:border-white/10"><Award className="w-4 h-4 text-[#FFB800]" /><span className="text-xs font-black text-[#111] dark:text-white uppercase tracking-wide">Points & Rewards</span></div>
-      <p className="text-[10px] text-gray-600 dark:text-gray-400 font-medium">Configure loyalty tiers, welcome gift, and referral rewards</p>
-
-      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Toggle label="Points System Active" desc="" checked={!!(sForm.appContent?.loyalty?.active ?? sForm.pointsAndLoyalty)} onChange={v => upd("appContent", { ...(sForm.appContent || {}), loyalty: { ...(sForm.appContent?.loyalty || {}), active: v } })} />
-        <Toggle label="Daily Bonus" desc="" checked={!!(sForm.appContent?.loyalty?.dailyBonusEnabled ?? true)} onChange={v => upd("appContent", { ...(sForm.appContent || {}), loyalty: { ...(sForm.appContent?.loyalty || {}), dailyBonusEnabled: v } })} />
-      </div>
-
-      <div className="text-xs font-bold text-[#111] dark:text-white pt-2">Loyalty Tier Thresholds (orders)</div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div><label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Bronze</label>
-          <input type="number" value={sForm.appContent?.loyalty?.bronzeThreshold ?? 3} onChange={e => upd("appContent", { ...(sForm.appContent || {}), loyalty: { ...(sForm.appContent?.loyalty || {}), bronzeThreshold: parseInt(e.target.value) || 3 } })}
-            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" /></div>
-        <div><label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Silver</label>
-          <input type="number" value={sForm.appContent?.loyalty?.silverThreshold ?? 10} onChange={e => upd("appContent", { ...(sForm.appContent || {}), loyalty: { ...(sForm.appContent?.loyalty || {}), silverThreshold: parseInt(e.target.value) || 10 } })}
-            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" /></div>
-        <div><label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Gold</label>
-          <input type="number" value={sForm.appContent?.loyalty?.goldThreshold ?? 25} onChange={e => upd("appContent", { ...(sForm.appContent || {}), loyalty: { ...(sForm.appContent?.loyalty || {}), goldThreshold: parseInt(e.target.value) || 25 } })}
-            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" /></div>
-        <div><label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Platinum</label>
-          <input type="number" value={sForm.appContent?.loyalty?.platinumThreshold ?? 50} onChange={e => upd("appContent", { ...(sForm.appContent || {}), loyalty: { ...(sForm.appContent?.loyalty || {}), platinumThreshold: parseInt(e.target.value) || 50 } })}
-            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" /></div>
-      </div>
-
-      <div className="text-xs font-bold text-[#111] dark:text-white pt-2">Orders Required Per Tier</div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div><label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Bronze Req.</label>
-          <input type="number" value={sForm.appContent?.loyalty?.ordersForBronze ?? 1} onChange={e => upd("appContent", { ...(sForm.appContent || {}), loyalty: { ...(sForm.appContent?.loyalty || {}), ordersForBronze: parseInt(e.target.value) || 1 } })}
-            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" /></div>
-        <div><label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Silver Req.</label>
-          <input type="number" value={sForm.appContent?.loyalty?.ordersForSilver ?? 3} onChange={e => upd("appContent", { ...(sForm.appContent || {}), loyalty: { ...(sForm.appContent?.loyalty || {}), ordersForSilver: parseInt(e.target.value) || 3 } })}
-            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" /></div>
-        <div><label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Gold Req.</label>
-          <input type="number" value={sForm.appContent?.loyalty?.ordersForGold ?? 5} onChange={e => upd("appContent", { ...(sForm.appContent || {}), loyalty: { ...(sForm.appContent?.loyalty || {}), ordersForGold: parseInt(e.target.value) || 5 } })}
-            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" /></div>
-        <div><label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Platinum Req.</label>
-          <input type="number" value={sForm.appContent?.loyalty?.ordersForPlatinum ?? 10} onChange={e => upd("appContent", { ...(sForm.appContent || {}), loyalty: { ...(sForm.appContent?.loyalty || {}), ordersForPlatinum: parseInt(e.target.value) || 10 } })}
-            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" /></div>
-      </div>
-
-      <div className="grid sm:grid-cols-3 gap-4 pt-2">
-        <div><label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Daily Bonus Points</label>
-          <input type="number" value={sForm.appContent?.loyalty?.dailyBonus ?? 10} onChange={e => upd("appContent", { ...(sForm.appContent || {}), loyalty: { ...(sForm.appContent?.loyalty || {}), dailyBonus: parseInt(e.target.value) || 10 } })}
-            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" /></div>
-        <div><label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Welcome Gift (₦)</label>
-          <input type="number" value={sForm.appContent?.welcomeGift?.credit ?? 2500} onChange={e => upd("appContent", { ...(sForm.appContent || {}), welcomeGift: { ...(sForm.appContent?.welcomeGift || {}), credit: parseFloat(e.target.value) || 0 } })}
-            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" /></div>
-        <div><label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Referral Reward (₦)</label>
-          <input type="number" value={sForm.referralReward ?? 500} onChange={e => upd("referralReward", parseFloat(e.target.value) || 0)}
-            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" /></div>
-      </div>
-
-      <div className="text-xs font-bold text-[#111] dark:text-white pt-3 border-t border-gray-100 dark:border-white/10">Rider Mission Targets & Fleet Incentives</div>
-      <div className="grid sm:grid-cols-3 gap-4">
-        <div>
-          <label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Daily Target Trips (per rider)</label>
-          <input type="number" min="1" value={sForm.dailyRiderTargetRides ?? 5} onChange={e => upd("dailyRiderTargetRides", parseInt(e.target.value) || 5)}
-            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" />
-        </div>
-        <div>
-          <label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Target Bonus Points</label>
-          <input type="number" min="0" value={sForm.dailyRiderTargetPoints ?? 50} onChange={e => upd("dailyRiderTargetPoints", parseInt(e.target.value) || 50)}
-            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" />
-        </div>
-        <div>
-          <label className="text-[10px] font-bold text-gray-600 dark:text-gray-400 block">Point Naira Value (₦ per pt)</label>
-          <input type="number" min="1" value={sForm.pointNairaValue ?? 10} onChange={e => upd("pointNairaValue", parseInt(e.target.value) || 10)}
-            className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-[#111] dark:text-white" />
-        </div>
-      </div>
-      <div className="flex justify-end pt-1"><SaveBtn onClick={() => saveSettings("Points & Rewards")} loading={saving} /></div>
-    </div>
-
-    {/* Section 5 — Branding & Communication */}
-    <div className="bg-white dark:bg-[#1a1a1a] border border-gray-200 dark:border-white/10 rounded-3xl p-5 shadow-xs space-y-4">
-      <div className="flex items-center gap-2 pb-1 border-b border-gray-100 dark:border-white/10"><Globe className="w-4 h-4 text-[#FFB800]" /><span className="text-xs font-black text-[#111] dark:text-white uppercase tracking-wide">Branding & Communication</span></div>
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <div><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">APP NAME</label>
           <input value={sForm.appName ?? "ESDispatch"} onChange={e => upd("appName", e.target.value)} className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2.5 text-xs text-[#111] dark:text-white" /></div>
         <div><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">APP SLOGAN</label>
-          <input value={sForm.appSlogan ?? ""} onChange={e => upd("appSlogan", e.target.value)} placeholder="Premium Logistics & Dispatch" className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2.5 text-xs text-[#111] dark:text-white placeholder-gray-400 dark:placeholder-gray-500" /></div>
+          <input value={sForm.appSlogan ?? "PREMIUM LOGISTICS & DISPATCH"} onChange={e => upd("appSlogan", e.target.value)} placeholder="PREMIUM LOGISTICS & DISPATCH" className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2.5 text-xs text-[#111] dark:text-white placeholder-gray-400 dark:placeholder-gray-500" /></div>
         <div><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">APP VERSION</label>
           <input value={sForm.appVersion ?? "1.0.0"} onChange={e => upd("appVersion", e.target.value)} className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2.5 text-xs text-[#111] dark:text-white" /></div>
         <div><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">CONTACT EMAIL</label>
@@ -8700,10 +8967,7 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
         <div><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">APP STORE URL</label>
           <input value={sForm.appStoreUrl ?? ""} onChange={e => upd("appStoreUrl", e.target.value)} placeholder="https://apps.apple.com/app/id..." className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2.5 text-xs text-[#111] dark:text-white placeholder-gray-400 dark:placeholder-gray-500" /></div>
       </div>
-      <div className="flex justify-end pt-1"><SaveBtn onClick={() => saveSettings("Branding")} loading={saving} /></div>
     </div>
-
-
 
     {/* Section 7 — Administrative Staff & Sub-Admins */}
     <div className="bg-white dark:bg-[#1a1a1a] border border-gray-200 dark:border-white/10 rounded-3xl p-5 shadow-xs space-y-4">
@@ -8711,7 +8975,7 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
         <div className="flex items-center gap-2">
           <ShieldCheck className="w-5 h-5 text-[#FFB800]" />
           <div>
-            <span className="text-xs font-black text-[#111] dark:text-white uppercase tracking-wide">Administrative Staff & Sub-Admins</span>
+            <span className="text-xs font-black text-[#111] dark:text-white uppercase tracking-wide">Section 7 — Administrative Staff & Sub-Admins</span>
             <p className="text-[10px] text-gray-500 dark:text-gray-400 font-medium">Manage corporate identities, Staff IDs, access roles, and permissions</p>
           </div>
         </div>

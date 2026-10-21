@@ -203,6 +203,17 @@ data class PromoCode(
     val isLimited: Boolean = true
 )
 
+data class DeliveryServiceConfig(
+    val id: String = "",
+    val name: String = "",
+    val enabled: Boolean = true,
+    val baseFare: Double = 1500.0,
+    val perKm: Double = 100.0,
+    val perKg: Double = 50.0,
+    val perExtraStop: Double = 800.0,
+    val description: String = ""
+)
+
 data class HeroSlideItem(
     val id: String = UUID.randomUUID().toString(),
     val title: String = "",
