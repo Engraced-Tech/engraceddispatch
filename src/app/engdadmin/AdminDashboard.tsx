@@ -8362,6 +8362,22 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
 
       await setDoc(doc(db, "system_config", "global_settings"), payload, { merge: true });
 
+      // Synchronize marketing website CMS and public pages
+      const siteContentPayload: any = {
+        contactEmail: sForm.contactEmail || "support@engracedsmile.com",
+        contactPhone: sForm.supportPhone || "+234 905 626 3010",
+        contactAddress: sForm.contactAddress || "17 Upper Adesuwa Road, GRA, Benin City, Edo State",
+        supportWhatsapp: sForm.supportWhatsapp || "+234 905 626 3010",
+        playStoreUrl: sForm.playStoreUrl || "",
+        appStoreUrl: sForm.appStoreUrl || "",
+        privacyPolicyUrl: sForm.privacyPolicyUrl || "https://www.engracedsmile.com/privacy",
+        termsUrl: sForm.termsUrl || "https://www.engracedsmile.com/terms",
+        deleteAccountUrl: sForm.deleteAccountUrl || "https://www.engracedsmile.com/deleteaccount",
+        faqUrl: sForm.faqUrl || "https://www.engracedsmile.com/faq",
+        updatedAt: Timestamp.now(),
+      };
+      await setDoc(doc(db, "site_content", "settings"), siteContentPayload, { merge: true });
+
       // Synchronize core pricing matrix with system_config/pricing
       const pricingPayload: any = {
         deliveryTypes: currentTypes,
@@ -8935,6 +8951,14 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
           <input value={sForm.playStoreUrl ?? ""} onChange={e => upd("playStoreUrl", e.target.value)} placeholder="https://play.google.com/store/apps/details?id=..." className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2.5 text-xs text-[#111] dark:text-white placeholder-gray-400 dark:placeholder-gray-500" /></div>
         <div><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">APP STORE URL</label>
           <input value={sForm.appStoreUrl ?? ""} onChange={e => upd("appStoreUrl", e.target.value)} placeholder="https://apps.apple.com/app/id..." className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2.5 text-xs text-[#111] dark:text-white placeholder-gray-400 dark:placeholder-gray-500" /></div>
+        <div className="sm:col-span-2 lg:col-span-3"><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">OFFICE / DISPATCH HUB ADDRESS</label>
+          <input value={sForm.contactAddress ?? "17 Upper Adesuwa Road, GRA, Benin City, Edo State"} onChange={e => upd("contactAddress", e.target.value)} placeholder="17 Upper Adesuwa Road, GRA, Benin City, Edo State" className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2.5 text-xs text-[#111] dark:text-white placeholder-gray-400 dark:placeholder-gray-500" /></div>
+        <div><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">PRIVACY POLICY URL</label>
+          <input value={sForm.privacyPolicyUrl ?? "https://www.engracedsmile.com/privacy"} onChange={e => upd("privacyPolicyUrl", e.target.value)} placeholder="https://www.engracedsmile.com/privacy" className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2.5 text-xs text-[#111] dark:text-white placeholder-gray-400 dark:placeholder-gray-500" /></div>
+        <div><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">TERMS OF SERVICE URL</label>
+          <input value={sForm.termsUrl ?? "https://www.engracedsmile.com/terms"} onChange={e => upd("termsUrl", e.target.value)} placeholder="https://www.engracedsmile.com/terms" className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2.5 text-xs text-[#111] dark:text-white placeholder-gray-400 dark:placeholder-gray-500" /></div>
+        <div><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">DELETE ACCOUNT URL (GOOGLE PLAY)</label>
+          <input value={sForm.deleteAccountUrl ?? "https://www.engracedsmile.com/deleteaccount"} onChange={e => upd("deleteAccountUrl", e.target.value)} placeholder="https://www.engracedsmile.com/deleteaccount" className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2.5 text-xs text-[#111] dark:text-white placeholder-gray-400 dark:placeholder-gray-500 font-mono text-[11px]" /></div>
       </div>
     </div>
 

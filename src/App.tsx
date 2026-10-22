@@ -6,6 +6,7 @@ import { PublicTrackingPage } from "./pages/PublicTrackingPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { EmailVerifiedPage } from "./pages/EmailVerifiedPage";
 import { SignInPage, SignUpPage, ResetPasswordPage } from "./pages/AuthPages";
+import { DeleteAccountPage } from "./pages/DeleteAccountPage";
 import AboutPage from "@/app/(marketing)/about-us/page";
 import ServicePage from "@/app/(marketing)/service/page";
 import ContactUsPage from "@/app/(marketing)/contact-us/page";
@@ -34,6 +35,8 @@ export const App: React.FC = () => {
       <Route path="/privacy-policy" element={<Navigate to="/privacy" replace />} />
       <Route path="/terms" element={<TermsOfServicePage />} />
       <Route path="/terms-of-service" element={<Navigate to="/terms" replace />} />
+      <Route path="/deleteaccount" element={<DeleteAccountPage />} />
+      <Route path="/delete-account" element={<Navigate to="/deleteaccount" replace />} />
       <Route path="/refund" element={<RefundPolicyPage />} />
       <Route path="/refund-policy" element={<Navigate to="/refund" replace />} />
       <Route path="/sign-in" element={<SignInPage />} />

@@ -215,6 +215,12 @@ const Footer = () => {
             >
               Terms of Service
             </Link>
+            <Link href="/deleteaccount" style={{ color: "rgba(255,255,255,0.6)", fontSize: 14, textDecoration: "none" }}
+              onMouseEnter={(e) => (e.target.style.color = "#FFB800")}
+              onMouseLeave={(e) => (e.target.style.color = "rgba(255,255,255,0.6)")}
+            >
+              Delete Account
+            </Link>
           </div>
         </div>
       </div>

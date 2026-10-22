@@ -16,14 +16,18 @@ const defaults = {
   teamTitle: "Meet the ESDispatch Team",
   teamDescription: "Dedicated professionals committed to delivering excellence.",
   contactAddress: "17 Upper Adesuwa Road, GRA, Benin City, Edo State",
-  contactEmail: "support@esdispatch.com",
-  contactPhone: "+234 818 584 0000",
+  contactEmail: "support@engracedsmile.com",
+  contactPhone: "+234 905 626 3010",
+  supportWhatsapp: "+234 905 626 3010",
   socialTwitter: "https://twitter.com/esdispatch",
   socialFacebook: "https://facebook.com/esdispatch",
   socialInstagram: "https://instagram.com/esdispatch",
   socialLinkedin: "https://linkedin.com/company/esdispatch",
   socialGithub: "https://github.com/esdispatch",
   footerCopyright: "© 2026 ESDispatch. All rights reserved.",
+  privacyPolicyUrl: "https://www.engracedsmile.com/privacy",
+  termsUrl: "https://www.engracedsmile.com/terms",
+  deleteAccountUrl: "https://www.engracedsmile.com/deleteaccount",
   playStoreUrl: "",
   appStoreUrl: "",
 };
@@ -31,14 +35,40 @@ const defaults = {
 export function useSiteContent() {
   const [content, setContent] = useState(defaults);
   const [loading, setLoading] = useState(true);
+
   useEffect(() => {
-    const unsub = onSnapshot(doc(db, "site_content", "settings"), (snap) => {
+    // 1. Listen to system_config/global_settings (Admin Settings tab sync)
+    const unsubGlobal = onSnapshot(doc(db, "system_config", "global_settings"), (snap) => {
       if (snap.exists()) {
-        setContent({ ...defaults, ...snap.data() });
+        const d = snap.data();
+        setContent((prev) => ({
+          ...prev,
+          contactEmail: d.contactEmail || d.supportEmail || prev.contactEmail,
+          contactPhone: d.supportPhone || d.contactPhone || prev.contactPhone,
+          contactAddress: d.contactAddress || prev.contactAddress,
+          supportWhatsapp: d.supportWhatsapp || d.supportPhone || prev.supportWhatsapp,
+          playStoreUrl: d.playStoreUrl || prev.playStoreUrl,
+          appStoreUrl: d.appStoreUrl || prev.appStoreUrl,
+          privacyPolicyUrl: d.privacyPolicyUrl || prev.privacyPolicyUrl,
+          termsUrl: d.termsUrl || prev.termsUrl,
+          deleteAccountUrl: d.deleteAccountUrl || prev.deleteAccountUrl,
+        }));
       }
       setLoading(false);
     });
-    return unsub;
+
+    // 2. Listen to site_content/settings (CMS sync)
+    const unsubSite = onSnapshot(doc(db, "site_content", "settings"), (snap) => {
+      if (snap.exists()) {
+        setContent((prev) => ({ ...prev, ...snap.data() }));
+      }
+    });
+
+    return () => {
+      unsubGlobal();
+      unsubSite();
+    };
   }, []);
+
   return { content, loading };
 }

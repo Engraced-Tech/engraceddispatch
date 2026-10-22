@@ -570,6 +570,15 @@ class DeliveryViewModel : WalletViewModel() {
         } catch (e: Throwable) { "" }
         _paystackPublicKey.value = cachedPaystackKey.ifBlank { buildConfigPaystackKey }
 
+        _supportPhone.value = prefs.getString("support_phone", "+2349056263010") ?: "+2349056263010"
+        _supportWhatsapp.value = prefs.getString("support_whatsapp", "+2349056263010") ?: "+2349056263010"
+        _supportEmail.value = prefs.getString("support_email", "support@engracedsmile.com") ?: "support@engracedsmile.com"
+        _contactAddress.value = prefs.getString("contact_address", "17 Upper Adesuwa Road, GRA, Benin City, Edo State") ?: "17 Upper Adesuwa Road, GRA, Benin City, Edo State"
+        _privacyPolicyUrl.value = prefs.getString("privacy_policy_url", "https://www.engracedsmile.com/privacy") ?: "https://www.engracedsmile.com/privacy"
+        _termsUrl.value = prefs.getString("terms_url", "https://www.engracedsmile.com/terms") ?: "https://www.engracedsmile.com/terms"
+        _deleteAccountUrl.value = prefs.getString("delete_account_url", "https://www.engracedsmile.com/deleteaccount") ?: "https://www.engracedsmile.com/deleteaccount"
+        _faqUrl.value = prefs.getString("faq_url", "https://www.engracedsmile.com/faq") ?: "https://www.engracedsmile.com/faq"
+
         _surgeMultiplier.value = (prefs.getString("pricing_surge", "1.0") ?: "1.0").toDoubleOrNull() ?: 1.0
 
  
@@ -735,6 +744,63 @@ class DeliveryViewModel : WalletViewModel() {
                         if (clean.isNotBlank() && clean != "pk_unset" && clean != "unset") {
                             _paystackPublicKey.value = clean
                             savePref("paystack_public_key", clean)
+                        }
+                    }
+
+                    (snap.getString("supportPhone") ?: snap.getString("contactPhone"))?.let {
+                        val clean = it.trim()
+                        if (clean.isNotBlank()) {
+                            _supportPhone.value = clean
+                            savePref("support_phone", clean)
+                        }
+                    }
+                    (snap.getString("supportWhatsapp") ?: snap.getString("whatsappPhone"))?.let {
+                        val clean = it.trim()
+                        if (clean.isNotBlank()) {
+                            _supportWhatsapp.value = clean
+                            savePref("support_whatsapp", clean)
+                        }
+                    }
+                    (snap.getString("contactEmail") ?: snap.getString("supportEmail"))?.let {
+                        val clean = it.trim()
+                        if (clean.isNotBlank()) {
+                            _supportEmail.value = clean
+                            savePref("support_email", clean)
+                        }
+                    }
+                    (snap.getString("contactAddress") ?: snap.getString("officeAddress"))?.let {
+                        val clean = it.trim()
+                        if (clean.isNotBlank()) {
+                            _contactAddress.value = clean
+                            savePref("contact_address", clean)
+                        }
+                    }
+                    snap.getString("privacyPolicyUrl")?.let {
+                        val clean = it.trim()
+                        if (clean.isNotBlank()) {
+                            _privacyPolicyUrl.value = clean
+                            savePref("privacy_policy_url", clean)
+                        }
+                    }
+                    snap.getString("termsUrl")?.let {
+                        val clean = it.trim()
+                        if (clean.isNotBlank()) {
+                            _termsUrl.value = clean
+                            savePref("terms_url", clean)
+                        }
+                    }
+                    snap.getString("deleteAccountUrl")?.let {
+                        val clean = it.trim()
+                        if (clean.isNotBlank()) {
+                            _deleteAccountUrl.value = clean
+                            savePref("delete_account_url", clean)
+                        }
+                    }
+                    snap.getString("faqUrl")?.let {
+                        val clean = it.trim()
+                        if (clean.isNotBlank()) {
+                            _faqUrl.value = clean
+                            savePref("faq_url", clean)
                         }
                     }
 
@@ -4614,6 +4680,72 @@ class DeliveryViewModel : WalletViewModel() {
 
     private val _paystackPublicKey = MutableStateFlow<String>("")
     val paystackPublicKey: StateFlow<String> = _paystackPublicKey.asStateFlow()
+
+    private val _supportPhone = MutableStateFlow("+2349056263010")
+    val supportPhone: StateFlow<String> = _supportPhone.asStateFlow()
+
+    private val _supportWhatsapp = MutableStateFlow("+2349056263010")
+    val supportWhatsapp: StateFlow<String> = _supportWhatsapp.asStateFlow()
+
+    private val _supportEmail = MutableStateFlow("support@engracedsmile.com")
+    val supportEmail: StateFlow<String> = _supportEmail.asStateFlow()
+
+    private val _contactAddress = MutableStateFlow("17 Upper Adesuwa Road, GRA, Benin City, Edo State")
+    val contactAddress: StateFlow<String> = _contactAddress.asStateFlow()
+
+    private val _privacyPolicyUrl = MutableStateFlow("https://www.engracedsmile.com/privacy")
+    val privacyPolicyUrl: StateFlow<String> = _privacyPolicyUrl.asStateFlow()
+
+    private val _termsUrl = MutableStateFlow("https://www.engracedsmile.com/terms")
+    val termsUrl: StateFlow<String> = _termsUrl.asStateFlow()
+
+    private val _deleteAccountUrl = MutableStateFlow("https://www.engracedsmile.com/deleteaccount")
+    val deleteAccountUrl: StateFlow<String> = _deleteAccountUrl.asStateFlow()
+
+    private val _faqUrl = MutableStateFlow("https://www.engracedsmile.com/faq")
+    val faqUrl: StateFlow<String> = _faqUrl.asStateFlow()
+
+    fun requestAccountDeletion(reason: String = "", onResult: (Boolean, String?) -> Unit) {
+        val uId = FirebaseManager.auth?.currentUser?.uid ?: ""
+        val email = FirebaseManager.auth?.currentUser?.email ?: _userEmail.value
+        val phone = _userPhone.value
+        val name = _userName.value
+        val now = com.google.firebase.Timestamp.now()
+
+        val payload = hashMapOf<String, Any>(
+            "userId" to uId,
+            "email" to email,
+            "phone" to phone,
+            "name" to name,
+            "reason" to reason,
+            "status" to "PENDING",
+            "createdAt" to now,
+            "requestedAt" to now,
+            "source" to "mobile_app"
+        )
+
+        val firestore = FirebaseManager.firestore
+        if (firestore == null) {
+            onResult(false, "Service temporarily unavailable")
+            return
+        }
+
+        firestore.collection("account_deletion_requests").add(payload)
+            .addOnSuccessListener {
+                if (uId.isNotBlank()) {
+                    firestore.collection("users").document(uId)
+                        .update("status", "DELETION_REQUESTED", "deletionRequestedAt", now)
+                        .addOnCompleteListener {
+                            onResult(true, null)
+                        }
+                } else {
+                    onResult(true, null)
+                }
+            }
+            .addOnFailureListener { err ->
+                onResult(false, err.localizedMessage)
+            }
+    }
 
 
 

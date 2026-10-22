@@ -14,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -291,25 +292,47 @@ fun PrivacyPolicySheet(
                 LegalClauseCard(
                     number = "05",
                     title = "Compliance & Account Control",
-                    content = "Users have full rights to request transaction history audits, correct inaccurate information, or request account data erasure by contacting our compliance desk at compliance@engracedsmile.com.",
+                    content = "Users have full rights to request transaction history audits, correct inaccurate information, or request permanent account and data erasure directly in app settings, on the web at https://www.engracedsmile.com/deleteaccount, or by contacting our compliance desk at compliance@engracedsmile.com.",
                     isDark = isDark,
                     surfaceColor = surfaceColor,
                     textColor = textColor
                 )
             }
 
-            Button(
-                onClick = onDismiss,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isDark) Gold else Obsidian,
-                    contentColor = if (isDark) Obsidian else Gold
-                )
+            val context = LocalContext.current
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("CLOSE PRIVACY POLICY", fontSize = 13.sp, fontWeight = FontWeight.Black)
+                OutlinedButton(
+                    onClick = {
+                        try {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://www.engracedsmile.com/privacy"))
+                            context.startActivity(intent)
+                        } catch (_: Exception) {}
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(50.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, if (isDark) Gold.copy(alpha = 0.5f) else Obsidian.copy(alpha = 0.3f))
+                ) {
+                    Text("VIEW ONLINE", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (isDark) GoldLight else Obsidian)
+                }
+
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .weight(1.2f)
+                        .height(50.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isDark) Gold else Obsidian,
+                        contentColor = if (isDark) Obsidian else Gold
+                    )
+                ) {
+                    Text("CLOSE", fontSize = 13.sp, fontWeight = FontWeight.Black)
+                }
             }
         }
     }

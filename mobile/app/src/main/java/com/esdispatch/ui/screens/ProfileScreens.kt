@@ -1089,7 +1089,7 @@ fun ProfileScreen(
                                             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                                 type = "text/plain"
                                                 putExtra(Intent.EXTRA_SUBJECT, "Join ESDispatch!")
-                                                putExtra(Intent.EXTRA_TEXT, "Use my referral code ${referralCode.value} to sign up for ESDispatch! https://esdispatch.app/refer?code=${referralCode.value}")
+                                                putExtra(Intent.EXTRA_TEXT, "Use my referral code ${referralCode.value} to sign up for ESDispatch! https://www.engracedsmile.com/refer?code=${referralCode.value}")
                                             }
                                             context.startActivity(Intent.createChooser(shareIntent, "Share Referral Code"))
                                         }
@@ -1376,6 +1376,7 @@ fun ProfileScreen(
     }
     if (showHelpSupportSheet) {
         HelpSupportSheet(
+            viewModel = viewModel,
             onOpenLiveChat = {
                 showHelpSupportSheet = false
                 showLiveChatSheet = true
@@ -1917,6 +1918,13 @@ fun SettingsScreen(
     var showLoginModeSheet by remember { mutableStateOf(false) }
     var showSignOutDialog by remember { mutableStateOf(false) }
     var showPasswordResetDialog by remember { mutableStateOf(false) }
+    var showPrivacySheet by remember { mutableStateOf(false) }
+    var showTermsSheet by remember { mutableStateOf(false) }
+    var showDeleteAccountDialog by remember { mutableStateOf(false) }
+    var isSubmittingDeletion by remember { mutableStateOf(false) }
+    val privacyPolicyUrl by viewModel.privacyPolicyUrl.collectAsState()
+    val termsUrl by viewModel.termsUrl.collectAsState()
+    val deleteAccountUrl by viewModel.deleteAccountUrl.collectAsState()
     var resetEmailInput by remember(userEmail) { mutableStateOf(userEmail) }
     var isSendingReset by remember { mutableStateOf(false) }
 
@@ -2241,6 +2249,46 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(20.dp))
 
+                    // Legal, Privacy & Account Control
+                    SettingsSectionHeader("Legal & Account Control")
+                    Surface(
+                        shape = RoundedCornerShape(24.dp),
+                        color = AppSurface,
+                        border = BorderStroke(1.dp, if (isDark) BorderDark else Color(0xFFE5E7EB)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(6.dp)) {
+                            SettingsItemHighContrast(
+                                icon = Icons.Filled.Security,
+                                title = "Privacy Policy",
+                                subtitle = "How we protect your personal and telemetry data",
+                                badge = "LEGAL",
+                                badgeColor = Gold,
+                                onClick = { showPrivacySheet = true }
+                            )
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = 14.dp), color = if (isDark) BorderDark else Color(0xFFF3F4F6))
+                            SettingsItemHighContrast(
+                                icon = Icons.Filled.Gavel,
+                                title = "Terms of Service",
+                                subtitle = "ESDispatch customer and carrier service standards",
+                                badge = "TERMS",
+                                badgeColor = Gold,
+                                onClick = { showTermsSheet = true }
+                            )
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = 14.dp), color = if (isDark) BorderDark else Color(0xFFF3F4F6))
+                            SettingsItemHighContrast(
+                                icon = Icons.Filled.DeleteForever,
+                                title = "Delete Account & Data",
+                                subtitle = "Request permanent erasure of account and personal records",
+                                badge = "ERASURE",
+                                badgeColor = Color(0xFFEF4444),
+                                onClick = { showDeleteAccountDialog = true }
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
                     // Domain 5: Storage & Diagnostics
                     SettingsSectionHeader("Storage & Diagnostics")
                     Surface(
@@ -2394,6 +2442,90 @@ fun SettingsScreen(
     }
     if (showLoginModeSheet) {
         LoginModeSheet(viewModel) { showLoginModeSheet = false }
+    }
+    if (showPrivacySheet) {
+        com.esdispatch.ui.components.PrivacyPolicySheet(
+            onDismiss = { showPrivacySheet = false }
+        )
+    }
+    if (showTermsSheet) {
+        com.esdispatch.ui.components.TermsOfServiceSheet(
+            onDismiss = { showTermsSheet = false }
+        )
+    }
+    if (showDeleteAccountDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!isSubmittingDeletion) showDeleteAccountDialog = false },
+            containerColor = AppSurface,
+            title = {
+                Text(
+                    text = "Request Account Deletion",
+                    fontWeight = FontWeight.Black,
+                    fontSize = 18.sp,
+                    color = Color.Red
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Deleting your account will permanently remove your login credentials, profile details, security PIN, and saved delivery addresses.\n\nFinancial transaction records are retained strictly for statutory accounting and tax compliance pursuant to Nigerian law.",
+                        fontSize = 13.sp,
+                        color = AppTextColor,
+                        lineHeight = 18.sp
+                    )
+                    Text(
+                        text = "You can also submit your request through our online deletion portal at $deleteAccountUrl",
+                        fontSize = 11.sp,
+                        color = TextGray
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        isSubmittingDeletion = true
+                        viewModel.requestAccountDeletion("Requested via in-app settings") { success, err ->
+                            isSubmittingDeletion = false
+                            showDeleteAccountDialog = false
+                            if (success) {
+                                Toast.makeText(context, "Account deletion request submitted. Signing out.", Toast.LENGTH_LONG).show()
+                                viewModel.signOut()
+                                onNavigate("SIGN_IN")
+                            } else {
+                                Toast.makeText(context, "Request failed: " + (err ?: "Please try again later"), Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                    enabled = !isSubmittingDeletion,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red, contentColor = Color.White),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(if (isSubmittingDeletion) "Submitting..." else "Submit Request", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick = {
+                            try {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(deleteAccountUrl))
+                                context.startActivity(intent)
+                            } catch (_: Exception) {
+                                Toast.makeText(context, "Unable to open browser", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    ) {
+                        Text("Open Web Portal", color = Gold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    TextButton(
+                        onClick = { showDeleteAccountDialog = false },
+                        enabled = !isSubmittingDeletion
+                    ) {
+                        Text("Cancel", color = TextGray)
+                    }
+                }
+            }
+        )
     }
 
     if (showSignOutDialog) {
@@ -4529,12 +4661,17 @@ fun PaymentMethodsSheet(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HelpSupportSheet(
+    viewModel: DeliveryViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
     onOpenLiveChat: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
+    val supportPhone by viewModel.supportPhone.collectAsState()
+    val supportWhatsapp by viewModel.supportWhatsapp.collectAsState()
+    val supportEmail by viewModel.supportEmail.collectAsState()
+    val faqUrl by viewModel.faqUrl.collectAsState()
 
     val dismissWithAnim = {
         scope.launch { sheetState.hide() }.invokeOnCompletion {
@@ -4563,7 +4700,8 @@ fun HelpSupportSheet(
                 // Call Support
                 Surface(
                     onClick = {
-                        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:+2348031234567"))
+                        val cleanPhone = supportPhone.replace(Regex("[^0-9+]"), "")
+                        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$cleanPhone"))
                         context.startActivity(intent)
                         dismissWithAnim()
                     },
@@ -4576,7 +4714,7 @@ fun HelpSupportSheet(
                         Spacer(modifier = Modifier.width(16.dp))
                         Column {
                             Text("Call Support Desk", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = AppOnSurface)
-                            Text("+234 905 626 3010 (24/7 Dispatch Desk)", fontSize = 12.sp, color = TextGray)
+                            Text("$supportPhone (24/7 Dispatch Desk)", fontSize = 12.sp, color = TextGray)
                         }
                     }
                 }
@@ -4585,7 +4723,8 @@ fun HelpSupportSheet(
                 Surface(
                     onClick = {
                         try {
-                            val waUrl = "https://wa.me/2348031234567?text=" + java.net.URLEncoder.encode("Hello ESDispatch Support, I need assistance with my delivery.", "UTF-8")
+                            val cleanWa = supportWhatsapp.replace(Regex("[^0-9]"), "")
+                            val waUrl = "https://wa.me/$cleanWa?text=" + java.net.URLEncoder.encode("Hello ESDispatch Support, I need assistance with my delivery.", "UTF-8")
                             val waIntent = Intent(Intent.ACTION_VIEW, Uri.parse(waUrl))
                             context.startActivity(waIntent)
                         } catch (e: Exception) {
@@ -4610,7 +4749,7 @@ fun HelpSupportSheet(
                         Spacer(modifier = Modifier.width(16.dp))
                         Column {
                             Text("WhatsApp Live Dispatch", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = AppOnSurface)
-                            Text("+234 905 626 3010 (Direct WhatsApp)", fontSize = 12.sp, color = TextGray)
+                            Text("$supportWhatsapp (Direct WhatsApp)", fontSize = 12.sp, color = TextGray)
                         }
                     }
                 }
@@ -4637,7 +4776,7 @@ fun HelpSupportSheet(
                 // Email Support
                 Surface(
                     onClick = {
-                        val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:support@engracedsmile.com"))
+                        val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:$supportEmail"))
                         context.startActivity(intent)
                         dismissWithAnim()
                     },
@@ -4650,7 +4789,7 @@ fun HelpSupportSheet(
                         Spacer(modifier = Modifier.width(16.dp))
                         Column {
                             Text("Email Support Centre", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = AppOnSurface)
-                            Text("support@engracedsmile.com", fontSize = 12.sp, color = TextGray)
+                            Text(supportEmail, fontSize = 12.sp, color = TextGray)
                         }
                     }
                 }
@@ -4659,7 +4798,7 @@ fun HelpSupportSheet(
                 Surface(
                     onClick = {
                         try {
-                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://esdispatch.app/support"))
+                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(faqUrl.ifBlank { "https://www.engracedsmile.com/faq" }))
                             context.startActivity(intent)
                         } catch (e: Exception) {
                             Toast.makeText(context, "No browser found.", Toast.LENGTH_SHORT).show()

@@ -1312,6 +1312,12 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
+    match /account_deletion_requests/{docId} {
+      allow read: if isAdmin();
+      allow create: if request.resource.data.keys().hasOnly(['userId', 'email', 'phone', 'name', 'reason', 'status', 'createdAt', 'requestedAt', 'source']) && isReasonableWrite();
+      allow update, delete: if isAdmin();
+    }
+
     // ===============================================================
     // ADDRESS REGISTRY (public landmarks & geocoded zones)
     // ===============================================================
