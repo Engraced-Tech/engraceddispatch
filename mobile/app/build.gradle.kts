@@ -41,8 +41,8 @@ android {
     applicationId = "com.esdispatch.app"
     minSdk = 24
     targetSdk = 36
-    versionCode = 3
-    versionName = "1.0.2"
+    versionCode = 4
+    versionName = "1.0.3"
 
     val resolvedMapboxToken = resolveEnv("MAPBOX_ACCESS_TOKEN").ifBlank { "unset" }
     buildConfigField("String", "MAPBOX_ACCESS_TOKEN", "\"$resolvedMapboxToken\"")
