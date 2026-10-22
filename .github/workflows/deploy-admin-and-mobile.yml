@@ -1,9 +1,6 @@
 name: Deploy Admin & Mobile App (Play Store & Firebase)
 
 on:
-  push:
-    branches: [ main ]
-    tags: [ 'v*' ]
   workflow_dispatch:
 
 jobs:

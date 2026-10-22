@@ -41,8 +41,14 @@ android {
     applicationId = "com.esdispatch.app"
     minSdk = 24
     targetSdk = 36
-    versionCode = 5
-    versionName = "1.0.4"
+    val envVersionCode = System.getenv("VERSION_CODE")?.toIntOrNull()
+        ?: (project.findProperty("versionCode") as? String)?.toIntOrNull()
+        ?: 5
+    versionCode = envVersionCode
+    val envVersionName = System.getenv("VERSION_NAME")?.takeIf { it.isNotBlank() }
+        ?: (project.findProperty("versionName") as? String)?.takeIf { it.isNotBlank() }
+        ?: "1.0.4"
+    versionName = envVersionName
 
     val resolvedMapboxToken = resolveEnv("MAPBOX_ACCESS_TOKEN").ifBlank { "unset" }
     buildConfigField("String", "MAPBOX_ACCESS_TOKEN", "\"$resolvedMapboxToken\"")
@@ -81,7 +87,15 @@ android {
         enableV1Signing = true
         enableV2Signing = true
       } else {
-        throw GradleException("Release keystore not found at $keystorePath. Set KEYSTORE_PATH or generate one: keytool -genkey -v -keystore app/release-key.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload")
+        val debugKeystore = file(System.getProperty("user.home") + "/.android/debug.keystore")
+        if (debugKeystore.exists()) {
+          storeFile = debugKeystore
+          storePassword = "android"
+          keyAlias = "androiddebugkey"
+          keyPassword = "android"
+        } else {
+          println("WARNING: Neither release keystore ($keystorePath) nor debug keystore found.")
+        }
       }
     }
     create("debugConfig") {

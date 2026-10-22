@@ -32,6 +32,11 @@ functions/service-account.json
 # Android signing keys
 *.jks
 *.keystore
+*release-key*
+*[bB][aA][sS][eE]64*
+*KEYSTORE_BASE64*
+*play-store*.json
+*service-account*.json
 
 # Scratch & temporary logs
 *.log
