@@ -1907,8 +1907,7 @@ fun SettingsScreen(
     val userPin by viewModel.userPin.collectAsState()
     val plainUserPin by viewModel.plainUserPin.collectAsState()
     val clipboardManager = LocalClipboardManager.current
-    var isPinRevealed by remember { mutableStateOf(false) }
-    val loginMode by viewModel.loginMode.collectAsState()
+        val loginMode by viewModel.loginMode.collectAsState()
     val biometricEn by viewModel.biometricEnabled.collectAsState()
     val userEmail by viewModel.userEmail.collectAsState()
     val userName by viewModel.userName.collectAsState()
@@ -2154,185 +2153,14 @@ fun SettingsScreen(
                             val hasConfiguredPin = effectivePin.length == 4 && effectivePin.all { it.isDigit() }
 
                             if (hasConfiguredPin) {
-                                Surface(
-                                    shape = RoundedCornerShape(20.dp),
-                                    color = if (isDark) LuxuryBlack else Color(0xFFF9FAFB),
-                                    border = BorderStroke(1.dp, if (isDark) BorderDark else Color(0xFFE5E7EB)),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                                ) {
-                                    Column(
-                                        modifier = Modifier.padding(14.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier.weight(1f)
-                                            ) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .size(38.dp)
-                                                        .clip(RoundedCornerShape(12.dp))
-                                                        .background(if (isDark) Gold.copy(alpha = 0.15f) else Obsidian.copy(alpha = 0.08f)),
-                                                    contentAlignment = Alignment.Center
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Filled.Dialpad,
-                                                        contentDescription = null,
-                                                        tint = if (isDark) Gold else Obsidian,
-                                                        modifier = Modifier.size(18.dp)
-                                                    )
-                                                }
-                                                Spacer(modifier = Modifier.width(10.dp))
-                                                Column {
-                                                    Text(
-                                                        text = "Security PIN",
-                                                        fontWeight = FontWeight.Bold,
-                                                        fontSize = 14.sp,
-                                                        color = textPrimary
-                                                    )
-                                                    Text(
-                                                        text = "4-digit PIN for transactions & quick login",
-                                                        fontSize = 11.sp,
-                                                        color = TextGray
-                                                    )
-                                                }
-                                            }
-                                            Surface(
-                                                shape = RoundedCornerShape(8.dp),
-                                                color = Color(0xFF10B981).copy(alpha = 0.15f)
-                                            ) {
-                                                Text(
-                                                    text = "ACTIVE",
-                                                    fontSize = 10.sp,
-                                                    fontWeight = FontWeight.Black,
-                                                    color = Color(0xFF10B981),
-                                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                                                )
-                                            }
-                                        }
-
-                                        Spacer(modifier = Modifier.height(12.dp))
-
-                                        // Clickable PIN box & Actions row
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.SpaceBetween
-                                        ) {
-                                            // Clickable PIN display: clicking reveals or masks PIN digits
-                                            Surface(
-                                                shape = RoundedCornerShape(14.dp),
-                                                color = if (isDark) Charcoal else Color.White,
-                                                border = BorderStroke(1.dp, if (isDark) Gold.copy(alpha = 0.35f) else Color(0xFFD1D5DB)),
-                                                modifier = Modifier
-                                                    .clip(RoundedCornerShape(14.dp))
-                                                    .clickable {
-                                                        isPinRevealed = !isPinRevealed
-                                                    }
-                                            ) {
-                                                Row(
-                                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    Text(
-                                                        text = if (isPinRevealed) {
-                                                            "${effectivePin[0]}  ${effectivePin[1]}  ${effectivePin[2]}  ${effectivePin[3]}"
-                                                        } else {
-                                                            "•  •  •  •"
-                                                        },
-                                                        fontSize = 17.sp,
-                                                        fontWeight = FontWeight.Black,
-                                                        fontFamily = FontFamily.Monospace,
-                                                        color = if (isPinRevealed) (if (isDark) Gold else Obsidian) else textPrimary,
-                                                        letterSpacing = 2.sp
-                                                    )
-                                                    Spacer(modifier = Modifier.width(8.dp))
-                                                    Text(
-                                                        text = if (isPinRevealed) "Hide" else "Tap to view",
-                                                        fontSize = 10.sp,
-                                                        fontWeight = FontWeight.SemiBold,
-                                                        color = TextGray
-                                                    )
-                                                }
-                                            }
-
-                                            // Action buttons: Eye reveal, Copy PIN, Change PIN
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                            ) {
-                                                // Eye toggle button
-                                                IconButton(
-                                                    onClick = { isPinRevealed = !isPinRevealed },
-                                                    modifier = Modifier
-                                                        .size(36.dp)
-                                                        .clip(CircleShape)
-                                                        .background(if (isDark) LuxuryBlack else Color(0xFFF3F4F6))
-                                                ) {
-                                                    Icon(
-                                                        imageVector = if (isPinRevealed) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                                                        contentDescription = if (isPinRevealed) "Hide PIN" else "Reveal PIN",
-                                                        tint = if (isDark) Gold else Obsidian,
-                                                        modifier = Modifier.size(18.dp)
-                                                    )
-                                                }
-
-                                                // Copy button
-                                                IconButton(
-                                                    onClick = {
-                                                        clipboardManager.setText(AnnotatedString(effectivePin))
-                                                        Toast.makeText(context, "Security PIN copied to clipboard", Toast.LENGTH_SHORT).show()
-                                                    },
-                                                    modifier = Modifier
-                                                        .size(36.dp)
-                                                        .clip(CircleShape)
-                                                        .background(if (isDark) LuxuryBlack else Color(0xFFF3F4F6))
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Filled.ContentCopy,
-                                                        contentDescription = "Copy PIN",
-                                                        tint = if (isDark) Gold else Obsidian,
-                                                        modifier = Modifier.size(18.dp)
-                                                    )
-                                                }
-
-                                                // Change PIN button
-                                                Surface(
-                                                    shape = RoundedCornerShape(10.dp),
-                                                    color = Gold,
-                                                    modifier = Modifier
-                                                        .clip(RoundedCornerShape(10.dp))
-                                                        .clickable { showPinSetupSheet = true }
-                                                ) {
-                                                    Row(
-                                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-                                                        verticalAlignment = Alignment.CenterVertically
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = Icons.Filled.Edit,
-                                                            contentDescription = null,
-                                                            tint = Obsidian,
-                                                            modifier = Modifier.size(12.dp)
-                                                        )
-                                                        Spacer(modifier = Modifier.width(4.dp))
-                                                        Text(
-                                                            text = "Change",
-                                                            fontSize = 11.sp,
-                                                            fontWeight = FontWeight.Black,
-                                                            color = Obsidian
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                                SettingsItemHighContrast(
+                                    icon = Icons.Filled.Dialpad,
+                                    title = "Security PIN",
+                                    subtitle = "4-digit PIN for transactions & quick login",
+                                    badge = "ACTIVE",
+                                    badgeColor = Color(0xFF10B981),
+                                    onClick = { showPinSetupSheet = true }
+                                )
                             } else {
                                 SettingsItemHighContrast(
                                     icon = Icons.Filled.Dialpad,
@@ -6769,11 +6597,16 @@ fun PaystackCheckoutSheet(
             // Embedded WebView with real-world Paystack Inline SDK integration.
             // The public key comes from BuildConfig (PAYSTACK_PUBLIC_KEY env var at build time);
             // if it is blank the checkout must NOT silently fall back to a test key.
-            val paystackKey = try {
-                com.esdispatch.BuildConfig.PAYSTACK_PUBLIC_KEY
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val sharedPrefs = remember(context) { context.getSharedPreferences("esdispatch_prefs", android.content.Context.MODE_PRIVATE) }
+            val cachedPaystackKey = sharedPrefs.getString("paystack_public_key", "") ?: ""
+            val buildConfigKey = try {
+                com.esdispatch.BuildConfig.PAYSTACK_PUBLIC_KEY.takeIf { it.isNotBlank() && it != "pk_unset" && it != "unset" } ?: ""
             } catch (e: Throwable) {
                 ""
             }
+            val rawKey = cachedPaystackKey.ifBlank { buildConfigKey }.trim()
+            val paystackKey = if (rawKey == "pk_unset" || rawKey == "unset") "" else rawKey
             val authEmail = try {
                 com.esdispatch.data.FirebaseManager.auth?.currentUser?.email
             } catch (e: Exception) {
@@ -6854,9 +6687,9 @@ fun PaystackCheckoutSheet(
                             <script>
                                 window.onload = function() {
                                     try {
-                                        if (!window.ESD_PS_KEY) {
-                                            document.getElementById('status-title').innerText = "Gateway Not Configured";
-                                            document.getElementById('status-desc').innerText = "Paystack public key is missing. Build with PAYSTACK_PUBLIC_KEY set.";
+                                        if (!window.ESD_PS_KEY || window.ESD_PS_KEY === 'pk_unset' || window.ESD_PS_KEY === 'unset') {
+                                            document.getElementById('status-title').innerText = "Online Payments";
+                                            document.getElementById('status-desc').innerText = "Online card checkout is temporarily undergoing scheduled maintenance. Please use your ESDispatch Wallet or contact customer support.";
                                             return;
                                         }
                                         var amountInKobo = Math.round($amount * 100);

@@ -2791,25 +2791,7 @@ function UsersTab({ activeUsers, deliveries = [], searchQuery, db, addLog, addTo
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [editUser, setEditUser] = useState<UserProfile | null>(null);
   const [previewUser, setPreviewUser] = useState<UserProfile | null>(null);
-  const [revealedPinIds, setRevealedPinIds] = useState<Set<string>>(new Set());
 
-  const togglePinVisibility = (userId: string) => {
-    setRevealedPinIds(prev => {
-      const next = new Set(prev);
-      if (next.has(userId)) next.delete(userId);
-      else next.add(userId);
-      return next;
-    });
-  };
-
-  const copyPinToClipboard = (pin: string) => {
-    if (!pin) return;
-    navigator.clipboard.writeText(pin).then(() => {
-      addToast?.("success", "Security PIN copied to clipboard");
-    }).catch(() => {
-      addToast?.("error", "Failed to copy PIN");
-    });
-  };
   const [showDeleteModal, setShowDeleteModal] = useState<{ mode: "single" | "bulk"; user?: UserProfile; count?: number } | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [showNewUser, setShowNewUser] = useState(false);
@@ -3946,29 +3928,11 @@ function UsersTab({ activeUsers, deliveries = [], searchQuery, db, addLog, addTo
                             {u.email || u.phone || "No direct contact"}
                           </div>
                           <div className="flex items-center gap-1.5 flex-wrap mt-1">
-                            {u.pin ? (
-                              <span className="inline-flex items-center gap-1 font-mono text-[10px] font-bold bg-amber-500/10 text-amber-900 dark:text-[#FFB800] border border-amber-500/20 px-1.5 py-0.5 rounded">
-                                <span>PIN:</span>
-                                <span className="tracking-widest">{revealedPinIds.has(u.id) ? u.pin : "••••"}</span>
-                                <button
-                                  type="button"
-                                  onClick={(e) => { e.stopPropagation(); togglePinVisibility(u.id); }}
-                                  className="text-gray-400 hover:text-gray-700 dark:hover:text-white p-0.5 rounded cursor-pointer"
-                                  title={revealedPinIds.has(u.id) ? "Hide PIN" : "Reveal PIN"}
-                                >
-                                  {revealedPinIds.has(u.id) ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(e) => { e.stopPropagation(); copyPinToClipboard(u.pin!); }}
-                                  className="text-gray-400 hover:text-gray-700 dark:hover:text-white p-0.5 rounded cursor-pointer"
-                                  title="Copy PIN"
-                                >
-                                  <Copy className="w-3 h-3" />
-                                </button>
+                            {(u.pin || u.pinHash) ? (
+                              <span className="inline-flex items-center gap-1 font-mono text-[10px] text-emerald-800 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded">
+                                <ShieldCheck className="w-2.5 h-2.5 text-emerald-500" />
+                                <span>PIN Protected</span>
                               </span>
-                            ) : u.pinHash ? (
-                              <span className="text-[10px] text-gray-400 font-mono">PIN: [Protected Hash]</span>
                             ) : (
                               <span className="text-[10px] text-gray-400">PIN: Not Set</span>
                             )}
@@ -4527,31 +4491,16 @@ function UsersTab({ activeUsers, deliveries = [], searchQuery, db, addLog, addTo
               </div>
               <div className="flex justify-between items-center py-1 border-b border-gray-100 dark:border-white/5">
                 <span className="text-gray-500 dark:text-gray-400 font-medium">Security PIN</span>
-                <div className="flex items-center gap-1.5">
-                  <span className="font-mono font-bold text-gray-900 dark:text-white">
-                    {previewUser.pin ? (revealedPinIds.has(previewUser.id) ? previewUser.pin : "••••") : (previewUser.pinHash ? "Protected Hash" : "Not Set")}
-                  </span>
-                  {previewUser.pin && (
+                <span className="text-xs font-semibold text-gray-900 dark:text-white flex items-center gap-1.5">
+                  {(previewUser.pin || previewUser.pinHash) ? (
                     <>
-                      <button
-                        type="button"
-                        onClick={() => togglePinVisibility(previewUser.id)}
-                        className="p-1 text-gray-400 hover:text-gray-700 dark:hover:text-white rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer"
-                        title={revealedPinIds.has(previewUser.id) ? "Hide PIN" : "Reveal PIN"}
-                      >
-                        {revealedPinIds.has(previewUser.id) ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => copyPinToClipboard(previewUser.pin!)}
-                        className="p-1 text-gray-400 hover:text-gray-700 dark:hover:text-white rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer"
-                        title="Copy PIN"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                      </button>
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+                      <span>Active &amp; Protected</span>
                     </>
+                  ) : (
+                    <span className="text-gray-400 font-normal">Not Configured</span>
                   )}
-                </div>
+                </span>
               </div>
               <div className="flex justify-between py-1">
                 <span className="text-gray-500 dark:text-gray-400 font-medium">Live Telemetry & Presence</span>
@@ -4938,40 +4887,18 @@ function UsersTab({ activeUsers, deliveries = [], searchQuery, db, addLog, addTo
                 </div>
               </div>
               <div>
-                <label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Security PIN (4 Digits)</label>
-                <div className="relative flex items-center">
-                  <input
-                    type={revealedPinIds.has("edit_user_pin") ? "text" : "password"}
-                    maxLength={4}
-                    value={form.pin || ""}
-                    onChange={e => {
-                      const val = e.target.value.replace(/\D/g, "").slice(0, 4);
-                      setForm(f => ({ ...f, pin: val }));
-                    }}
-                    placeholder="4-digit PIN (e.g. 1234)"
-                    className="w-full h-10 bg-gray-50 dark:bg-[#222] border border-gray-300 dark:border-white/15 rounded-xl px-3.5 pr-16 text-xs text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#FFB800]/40 font-mono tracking-widest"
-                  />
-                  <div className="absolute right-2 flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => togglePinVisibility("edit_user_pin")}
-                      className="p-1 text-gray-400 hover:text-gray-700 dark:hover:text-white rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer"
-                      title={revealedPinIds.has("edit_user_pin") ? "Hide PIN" : "Reveal PIN"}
-                    >
-                      {revealedPinIds.has("edit_user_pin") ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    </button>
-                    {form.pin && (
-                      <button
-                        type="button"
-                        onClick={() => copyPinToClipboard(form.pin)}
-                        className="p-1 text-gray-400 hover:text-gray-700 dark:hover:text-white rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer"
-                        title="Copy PIN"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-                </div>
+                <label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Reset Security PIN (4 Digits, Optional)</label>
+                <input
+                  type="password"
+                  maxLength={4}
+                  value={form.pin || ""}
+                  onChange={e => {
+                    const val = e.target.value.replace(/\D/g, "").slice(0, 4);
+                    setForm(f => ({ ...f, pin: val }));
+                  }}
+                  placeholder="Enter 4-digit PIN to reset (leave blank to keep)"
+                  className="w-full h-10 bg-gray-50 dark:bg-[#222] border border-gray-300 dark:border-white/15 rounded-xl px-3.5 text-xs text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#FFB800]/40 font-mono tracking-widest"
+                />
               </div>
             </div>
             <div className="flex items-center justify-end gap-3 pt-2">
@@ -6753,7 +6680,22 @@ function ShipmentsTab({ deliveries, drivers, users, addressRegistry = [], search
                 <div className="p-3 bg-gray-50 dark:bg-[#222] rounded-2xl border border-gray-100 dark:border-white/5 flex items-center justify-between">
                   <div>
                     <p className="text-[10px] font-extrabold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Handover Verification PIN</p>
-                    <p className="font-mono font-black text-lg text-[#111] dark:text-white tracking-widest">{detailsModal.delivery.otpCode || "—"}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-mono font-black text-xl text-[#FFB800] tracking-widest">{detailsModal.delivery.otpCode || "—"}</p>
+                      {detailsModal.delivery.otpCode && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(detailsModal.delivery.otpCode);
+                            addToast?.("success", `Handover PIN ${detailsModal.delivery.otpCode} copied`);
+                          }}
+                          className="p-1 text-gray-400 hover:text-[#111] dark:hover:text-white rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer"
+                          title="Copy Delivery Handover PIN"
+                        >
+                          <Copy size={13} />
+                        </button>
+                      )}
+                    </div>
                   </div>
                   {detailsModal.delivery.status !== "DELIVERED" && detailsModal.delivery.status !== "CANCELLED" && (
                     <button
@@ -8168,6 +8110,12 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
   const [recalibratingSettings, setRecalibratingSettings] = useState(false);
   const [purgingSettings, setPurgingSettings] = useState(false);
 
+  const [paystackPublicKey, setPaystackPublicKey] = useState("");
+
+  const [paystackSecretKey, setPaystackSecretKey] = useState("");
+
+  const [showPaystackSecret, setShowPaystackSecret] = useState(false);
+
   // Live Fare Simulator State
   const [simDistance, setSimDistance] = useState<number>(5);
   const [simWeight, setSimWeight] = useState<number>(1);
@@ -8366,6 +8314,7 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
         const d = snap.data();
         const { fcmServerKey: _, ...publicKeys } = d;
         setSForm((prev: any) => ({ ...prev, ...publicKeys }));
+        if (d.paystackPublicKey) setPaystackPublicKey((prev: string) => prev || d.paystackPublicKey);
       }
     });
     getDoc(doc(db, "system_config", "pricing")).then(s => {
@@ -8374,6 +8323,7 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
         setSForm((prev: any) => ({
           ...prev,
           deliveryTypes: (d.deliveryTypes && Array.isArray(d.deliveryTypes) && d.deliveryTypes.length > 0) ? d.deliveryTypes : (prev.deliveryTypes || DEFAULT_DELIVERY_SERVICES),
+          paystackPublicKey: d.paystackPublicKey ?? prev.paystackPublicKey,
           baseFare: d.baseFare ?? prev.baseFare,
           perKgRate: d.perKgRate ?? prev.perKgRate,
           expressSurcharge: d.expressSurcharge ?? prev.expressSurcharge,
@@ -8384,6 +8334,13 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
       }
     }).catch(() => {});
     getDoc(doc(db, "admin_config", "fcm")).then(s => {
+    getDoc(doc(db, "admin_config", "paystack")).then(s => {
+      if (s.exists()) {
+        const d = s.data() as any;
+        if (d.paystackPublicKey) setPaystackPublicKey(d.paystackPublicKey);
+        if (d.paystackSecretKey) setPaystackSecretKey(d.paystackSecretKey);
+      }
+    }).catch(() => {});
       if (s.exists() && (s.data() as any).fcmServerKey) setFcmKey((s.data() as any).fcmServerKey);
     }).catch(() => {});
     return unsub;
@@ -8401,6 +8358,7 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
         ? sForm.deliveryTypes
         : DEFAULT_DELIVERY_SERVICES;
       payload.deliveryTypes = currentTypes;
+      payload.paystackPublicKey = paystackPublicKey.trim();
 
       await setDoc(doc(db, "system_config", "global_settings"), payload, { merge: true });
 
@@ -8419,6 +8377,12 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
 
       if (fcmKey) {
         await setDoc(doc(db, "admin_config", "fcm"), { fcmServerKey: fcmKey, updatedAt: Timestamp.now() }, { merge: true });
+      }
+      if (paystackPublicKey || paystackSecretKey) {
+        const paystackAdminData: any = { updatedAt: Timestamp.now() };
+        if (paystackPublicKey) paystackAdminData.paystackPublicKey = paystackPublicKey.trim();
+        if (paystackSecretKey) paystackAdminData.paystackSecretKey = paystackSecretKey.trim();
+        await setDoc(doc(db, "admin_config", "paystack"), paystackAdminData, { merge: true });
       }
       addLog("Update Settings", section || "General");
       addToast?.("success", section ? `${section} settings saved successfully` : "Settings synchronized across mobile and fleet.");
@@ -8962,6 +8926,11 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
         <div className="relative"><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">FCM SERVER KEY</label>
           <div className="relative"><input type={showFcm ? "text" : "password"} value={fcmKey} onChange={e => setFcmKey(e.target.value)} className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2 pr-8 text-xs text-[#111] dark:text-white" placeholder="Stored in admin-only config"/>
             <button onClick={() => setShowFcm(!showFcm)} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 cursor-pointer"><Eye size={14} /></button></div></div>
+        <div><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">PAYSTACK PUBLIC KEY</label>
+          <input value={paystackPublicKey} onChange={e => setPaystackPublicKey(e.target.value)} placeholder="pk_live_... or pk_test_..." className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2.5 text-xs text-[#111] dark:text-white placeholder-gray-400 font-mono" /></div>
+        <div className="relative"><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">PAYSTACK SECRET KEY</label>
+          <div className="relative"><input type={showPaystackSecret ? "text" : "password"} value={paystackSecretKey} onChange={e => setPaystackSecretKey(e.target.value)} placeholder="sk_live_... or sk_test_..." className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2 pr-8 text-xs text-[#111] dark:text-white placeholder-gray-400 font-mono" />
+            <button onClick={() => setShowPaystackSecret(!showPaystackSecret)} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 cursor-pointer"><Eye size={14} /></button></div></div>
         <div><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">PLAY STORE URL</label>
           <input value={sForm.playStoreUrl ?? ""} onChange={e => upd("playStoreUrl", e.target.value)} placeholder="https://play.google.com/store/apps/details?id=..." className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2.5 text-xs text-[#111] dark:text-white placeholder-gray-400 dark:placeholder-gray-500" /></div>
         <div><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">APP STORE URL</label>

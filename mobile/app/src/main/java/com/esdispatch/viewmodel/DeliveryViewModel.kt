@@ -564,6 +564,12 @@ class DeliveryViewModel : WalletViewModel() {
 
         _expressSurcharge.value = (prefs.getString("pricing_express", "500.0") ?: "500.0").toDoubleOrNull() ?: 500.0
 
+        val cachedPaystackKey = prefs.getString("paystack_public_key", "") ?: ""
+        val buildConfigPaystackKey = try {
+            com.esdispatch.BuildConfig.PAYSTACK_PUBLIC_KEY.takeIf { it.isNotBlank() && it != "pk_unset" && it != "unset" } ?: ""
+        } catch (e: Throwable) { "" }
+        _paystackPublicKey.value = cachedPaystackKey.ifBlank { buildConfigPaystackKey }
+
         _surgeMultiplier.value = (prefs.getString("pricing_surge", "1.0") ?: "1.0").toDoubleOrNull() ?: 1.0
 
  
@@ -612,6 +618,18 @@ class DeliveryViewModel : WalletViewModel() {
 
                 }
 
+            }?.let { listenerRegistrations.add(it) }
+
+            db?.collection("admin_config")?.document("paystack")?.addSnapshotListener { pSnap, _ ->
+                if (pSnap != null && pSnap.exists()) {
+                    (pSnap.getString("publicKey") ?: pSnap.getString("paystackPublicKey"))?.let { pKey ->
+                        val clean = pKey.trim()
+                        if (clean.isNotBlank() && clean != "pk_unset" && clean != "unset") {
+                            _paystackPublicKey.value = clean
+                            savePref("paystack_public_key", clean)
+                        }
+                    }
+                }
             }?.let { listenerRegistrations.add(it) }
 
             db?.collection("address_registry")?.addSnapshotListener { snap, error ->
@@ -711,6 +729,14 @@ class DeliveryViewModel : WalletViewModel() {
                     }
 
                     (snap.get("maintenanceMode") as? Boolean)?.let { _maintenanceMode.value = it }
+
+                    (snap.getString("paystackPublicKey") ?: snap.getString("paystackKey"))?.let { keyVal ->
+                        val clean = keyVal.trim()
+                        if (clean.isNotBlank() && clean != "pk_unset" && clean != "unset") {
+                            _paystackPublicKey.value = clean
+                            savePref("paystack_public_key", clean)
+                        }
+                    }
 
                     val remoteDomain = (snap.getString("apiBaseUrl") 
 
@@ -4584,6 +4610,10 @@ class DeliveryViewModel : WalletViewModel() {
     // map is the sole in-app display source (C3 remediation).
 
     private val _handoverCodes = MutableStateFlow<Map<String, String>>(emptyMap())
+    val handoverCodes: StateFlow<Map<String, String>> = _handoverCodes.asStateFlow()
+
+    private val _paystackPublicKey = MutableStateFlow<String>("")
+    val paystackPublicKey: StateFlow<String> = _paystackPublicKey.asStateFlow()
 
 
 
@@ -17704,7 +17734,11 @@ class DeliveryViewModel : WalletViewModel() {
 
     fun initPaystack(context: android.content.Context) {
 
-        val key = com.esdispatch.BuildConfig.PAYSTACK_PUBLIC_KEY
+        val key = _paystackPublicKey.value.ifBlank {
+            try {
+                com.esdispatch.BuildConfig.PAYSTACK_PUBLIC_KEY.takeIf { it.isNotBlank() && it != "pk_unset" && it != "unset" } ?: ""
+            } catch (e: Throwable) { "" }
+        }
 
         if (key.isNotEmpty()) {
 

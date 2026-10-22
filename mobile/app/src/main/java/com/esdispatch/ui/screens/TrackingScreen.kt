@@ -228,6 +228,7 @@ fun ActiveTrackingScreen(
     onNavigate: (String) -> Unit
 ) {
     val selectedParcel by viewModel.selectedParcel.collectAsState()
+    val handoverCodes by viewModel.handoverCodes.collectAsState()
     androidx.activity.compose.BackHandler {
         onNavigate("BACK")
     }
@@ -1850,17 +1851,43 @@ fun ActiveTrackingScreen(
 
                                                 // Prominent 4-Digit Handover PIN Card (Customer Only)
                                                 if (!isRider && (parcel.otpCode.isNotBlank() || parcel.status !in listOf(ParcelStatus.DELIVERED, ParcelStatus.CANCELLED))) {
-                                                    val effectiveOtp = parcel.otpCode.ifBlank { viewModel.handoverCode(parcel.id) }
+                                                    val liveHandover = handoverCodes[parcel.id] ?: ""
+                                                    val effectiveOtp = parcel.otpCode.ifBlank { liveHandover }.ifBlank { viewModel.handoverCode(parcel.id) }
                                                     if (effectiveOtp.isBlank()) {
                                                         LaunchedEffect(parcel.id) {
                                                             viewModel.ensureDeliveryOtp(parcel.id)
                                                         }
                                                     }
                                                     var isOtpRevealed by remember(parcel.id) { mutableStateOf(true) }
-                                                    val rawDisplayOtp = if (effectiveOtp.isNotBlank()) effectiveOtp else "••••"
-                                                    val displayOtp = if (isOtpRevealed) rawDisplayOtp else "••••"
                                                     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
                                                     var pinCopied by remember { mutableStateOf(false) }
+
+                                                    LaunchedEffect(pinCopied) {
+                                                        if (pinCopied) {
+                                                            delay(2500)
+                                                            pinCopied = false
+                                                        }
+                                                    }
+
+                                                    val cleanOtp = effectiveOtp.trim()
+                                                    val displayOtp = if (isOtpRevealed && cleanOtp.isNotBlank()) cleanOtp.padEnd(4, '•').take(4) else "••••"
+
+                                                    val performCopy: () -> Unit = {
+                                                        val toCopy = effectiveOtp.ifBlank { parcel.otpCode }.ifBlank { liveHandover }
+                                                        if (toCopy.isNotBlank()) {
+                                                            clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(toCopy))
+                                                            pinCopied = true
+                                                            viewModel.showCustomToast("Handover PIN copied: " + toCopy)
+                                                        } else {
+                                                            viewModel.ensureDeliveryOtp(parcel.id) { freshPin ->
+                                                                if (freshPin.isNotBlank()) {
+                                                                    clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(freshPin))
+                                                                    pinCopied = true
+                                                                    viewModel.showCustomToast("Handover PIN copied: " + freshPin)
+                                                                }
+                                                            }
+                                                        }
+                                                    }
 
                                                     Column(
                                                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1903,16 +1930,7 @@ fun ActiveTrackingScreen(
                                                         Row(
                                                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                                                             verticalAlignment = Alignment.CenterVertically,
-                                                            modifier = Modifier.clickable {
-                                                                val toCopy = effectiveOtp.ifBlank { parcel.otpCode }
-                                                                if (toCopy.isNotBlank()) {
-                                                                    clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(toCopy))
-                                                                    pinCopied = true
-                                                                    viewModel.showCustomToast("Handover PIN copied: $toCopy")
-                                                                } else {
-                                                                    isOtpRevealed = !isOtpRevealed
-                                                                }
-                                                            }
+                                                            modifier = Modifier.clickable { performCopy() }
                                                         ) {
                                                             displayOtp.forEach { digit ->
                                                                 Box(
@@ -1932,24 +1950,9 @@ fun ActiveTrackingScreen(
                                                                 }
                                                             }
                                                         }
-                                                        Spacer(modifier = Modifier.height(8.dp))
+                                                        Spacer(modifier = Modifier.height(10.dp))
                                                         OutlinedButton(
-                                                            onClick = {
-                                                                val codeToCopy = effectiveOtp.ifBlank { parcel.otpCode }
-                                                                if (codeToCopy.isNotBlank()) {
-                                                                    clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(codeToCopy))
-                                                                    pinCopied = true
-                                                                    viewModel.showCustomToast("Handover PIN copied: $codeToCopy")
-                                                                } else {
-                                                                    viewModel.ensureDeliveryOtp(parcel.id) { freshPin ->
-                                                                        if (freshPin.isNotBlank()) {
-                                                                            clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(freshPin))
-                                                                            pinCopied = true
-                                                                            viewModel.showCustomToast("Handover PIN copied: $freshPin")
-                                                                        }
-                                                                    }
-                                                                }
-                                                            },
+                                                            onClick = { performCopy() },
                                                             colors = ButtonDefaults.outlinedButtonColors(
                                                                 contentColor = if (isDark) GoldLight else Obsidian
                                                             ),
@@ -1961,14 +1964,15 @@ fun ActiveTrackingScreen(
                                                             Icon(
                                                                 imageVector = if (pinCopied) Icons.Filled.Check else Icons.Filled.ContentCopy,
                                                                 contentDescription = "Copy PIN",
-                                                                tint = if (isDark) GoldLight else Obsidian,
+                                                                tint = if (pinCopied) Color(0xFF10B981) else (if (isDark) GoldLight else Obsidian),
                                                                 modifier = Modifier.size(14.dp)
                                                             )
                                                             Spacer(modifier = Modifier.width(6.dp))
                                                             Text(
                                                                 text = if (pinCopied) "PIN COPIED" else "COPY PIN",
                                                                 fontSize = 11.sp,
-                                                                fontWeight = FontWeight.Bold
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = if (pinCopied) Color(0xFF10B981) else (if (isDark) GoldLight else Obsidian)
                                                             )
                                                         }
                                                         Spacer(modifier = Modifier.height(8.dp))
