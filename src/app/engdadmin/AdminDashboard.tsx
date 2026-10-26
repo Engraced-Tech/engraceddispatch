@@ -8368,7 +8368,7 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
         contactPhone: sForm.supportPhone || "+234 905 626 3010",
         contactAddress: sForm.contactAddress || "17 Upper Adesuwa Road, GRA, Benin City, Edo State",
         supportWhatsapp: sForm.supportWhatsapp || "+234 905 626 3010",
-        playStoreUrl: sForm.playStoreUrl || "",
+        playStoreUrl: sForm.playStoreUrl || "https://play.google.com/store/apps/details?id=com.esdispatch.app",
         appStoreUrl: sForm.appStoreUrl || "",
         privacyPolicyUrl: sForm.privacyPolicyUrl || "https://www.engracedsmile.com/privacy",
         termsUrl: sForm.termsUrl || "https://www.engracedsmile.com/terms",
@@ -8948,7 +8948,7 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
           <div className="relative"><input type={showPaystackSecret ? "text" : "password"} value={paystackSecretKey} onChange={e => setPaystackSecretKey(e.target.value)} placeholder="sk_live_... or sk_test_..." className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2 pr-8 text-xs text-[#111] dark:text-white placeholder-gray-400 font-mono" />
             <button onClick={() => setShowPaystackSecret(!showPaystackSecret)} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 cursor-pointer"><Eye size={14} /></button></div></div>
         <div><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">PLAY STORE URL</label>
-          <input value={sForm.playStoreUrl ?? ""} onChange={e => upd("playStoreUrl", e.target.value)} placeholder="https://play.google.com/store/apps/details?id=..." className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2.5 text-xs text-[#111] dark:text-white placeholder-gray-400 dark:placeholder-gray-500" /></div>
+          <input value={sForm.playStoreUrl ?? "https://play.google.com/store/apps/details?id=com.esdispatch.app"} onChange={e => upd("playStoreUrl", e.target.value)} placeholder="https://play.google.com/store/apps/details?id=com.esdispatch.app" className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2.5 text-xs text-[#111] dark:text-white placeholder-gray-400 dark:placeholder-gray-500" /></div>
         <div><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">APP STORE URL</label>
           <input value={sForm.appStoreUrl ?? ""} onChange={e => upd("appStoreUrl", e.target.value)} placeholder="https://apps.apple.com/app/id..." className="w-full bg-gray-50 dark:bg-[#222] border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2.5 text-xs text-[#111] dark:text-white placeholder-gray-400 dark:placeholder-gray-500" /></div>
         <div className="sm:col-span-2 lg:col-span-3"><label className="block text-[10px] font-extrabold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">OFFICE / DISPATCH HUB ADDRESS</label>

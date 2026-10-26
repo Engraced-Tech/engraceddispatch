@@ -28,7 +28,7 @@ const defaults = {
   privacyPolicyUrl: "https://www.engracedsmile.com/privacy",
   termsUrl: "https://www.engracedsmile.com/terms",
   deleteAccountUrl: "https://www.engracedsmile.com/deleteaccount",
-  playStoreUrl: "",
+  playStoreUrl: "https://play.google.com/store/apps/details?id=com.esdispatch.app",
   appStoreUrl: "",
 };
 

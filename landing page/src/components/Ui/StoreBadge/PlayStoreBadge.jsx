@@ -1,8 +1,12 @@
-import Link from "next/link";
+const DEFAULT_PLAY_STORE_URL =
+  "https://play.google.com/store/apps/details?id=com.esdispatch.app";
 
-const PlayStoreBadge = ({ dark = false }) => (
-  <Link
-    href="#"
+const PlayStoreBadge = ({ dark = false, href = DEFAULT_PLAY_STORE_URL }) => (
+  <a
+    href={href}
+    target="_blank"
+    rel="noopener noreferrer"
+    aria-label="Get ESDispatch on Google Play Store"
     className="zubuz-store-badge"
     style={{
       display: "inline-flex",
@@ -32,7 +36,7 @@ const PlayStoreBadge = ({ dark = false }) => (
       <span style={{ fontSize: 10, opacity: 0.7 }}>GET IT ON</span>
       <span style={{ fontSize: 16, fontWeight: 700 }}>Google Play</span>
     </div>
-  </Link>
+  </a>
 );
 
 export default PlayStoreBadge;
