@@ -148,6 +148,11 @@ secrets {
   defaultPropertiesFileName = "../.env.example"
   ignoreList.add("NEXT_PUBLIC_.*")
   ignoreList.add("VITE_.*")
+  ignoreList.add("FIREBASE_PHONE_AUTH_VERIFICATION_TOKEN")
+  ignoreList.add("FIREBASE_ADMIN_.*")
+  ignoreList.add("SMTP_.*")
+  ignoreList.add("OTP_.*")
+  ignoreList.add(".*PEPPER.*")
   ignoreList.add("^$")
   ignoreList.add(".*[^a-zA-Z0-9_].*")
 }
