@@ -66,6 +66,9 @@ export const metadata = {
     icon: [{ url: "/favicon.svg", type: "image/svg+xml" }],
     apple: [{ url: "/favicon.svg" }],
   },
+  verification: {
+    google: "xo5l9TlJoNUa9y7OATxC9IkAu2EaMh3qmlgr-wCDlRI",
+  },
   manifest: "/manifest.json",
 };
 

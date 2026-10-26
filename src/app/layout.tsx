@@ -21,6 +21,9 @@ export const metadata: Metadata = {
     ],
     apple: "/favicon.svg",
   },
+  verification: {
+    google: "xo5l9TlJoNUa9y7OATxC9IkAu2EaMh3qmlgr-wCDlRI",
+  },
 };
 
 export default function RootLayout({
@@ -30,6 +33,12 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <meta
+          name="google-site-verification"
+          content="xo5l9TlJoNUa9y7OATxC9IkAu2EaMh3qmlgr-wCDlRI"
+        />
+      </head>
       <body suppressHydrationWarning className="min-h-screen antialiased">
         {children}
       </body>
