@@ -31,7 +31,7 @@ import { auth, db, getSecondaryAuth } from "@/lib/firebase";
 import { normalizePhoneNumber, phoneIndexKey } from "@/lib/phoneUtils";
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from "firebase/auth";
 import { collection, query, onSnapshot, doc, updateDoc, setDoc, deleteDoc, where, Timestamp, getDoc, getDocs, writeBatch, addDoc, increment, limit, orderBy, runTransaction, Transaction, serverTimestamp } from "firebase/firestore";
-import { Download, Shield, Truck, Package, ShoppingBag, Store, Users, User, Settings, Activity, Lock, Mail, Key, CheckCircle, CheckCircle2, AlertTriangle, Plus, Minus, ArrowRight, Trash2, LogOut, Search, Sliders, Award, DollarSign, Zap, Globe, UserPlus, BarChart3, MapPin, ShieldAlert, Image as ImageIcon, Menu, X, ShieldCheck, RefreshCw, UserCheck, UserX, Clock, TrendingUp, Edit3, Copy, Check, Percent, Gift, Star, Layers, Eye, EyeOff, Calendar, ChevronDown, ChevronUp, Phone, AtSign, Hash, Save, Bell, Send, ChevronLeft, ChevronRight, Bookmark, Folder, FileCheck, MessageSquare, Headphones, Settings2, LayoutGrid, FileText, Moon, Sun, Pencil, Repeat, Printer, Power, Wrench, Database, Tag, Radio, Sparkles, Info, Bike, Bot, CornerUpLeft, Maximize2 } from "lucide-react";
+import { Download, Shield, Truck, Package, ShoppingBag, Store, Users, User, Settings, Activity, Lock, Mail, Key, CheckCircle, CheckCircle2, AlertTriangle, Plus, Minus, ArrowRight, Trash2, LogOut, Search, Sliders, Award, DollarSign, Zap, Globe, UserPlus, BarChart3, MapPin, ShieldAlert, Image as ImageIcon, Menu, X, ShieldCheck, RefreshCw, UserCheck, UserX, Clock, TrendingUp, Edit3, Copy, Check, Percent, Gift, Star, Layers, Eye, EyeOff, Calendar, ChevronDown, ChevronUp, Phone, AtSign, Hash, Save, Bell, Send, ChevronLeft, ChevronRight, Bookmark, Folder, FileCheck, MessageSquare, Headphones, Settings2, LayoutGrid, FileText, Moon, Sun, Pencil, Repeat, Printer, Power, Wrench, Database, Tag, Radio, Sparkles, Info, Bike, Bot, CornerUpLeft, Maximize2, Rocket } from "lucide-react";
 import CMSTab from "./CMSTab";
 import LiveTrackingMap, { RegistryEntry, resolveEndpoint, resolveFromRegistry, isBeninCityCoord, isValidGeoCoord, DEFAULT_GEO_CENTER } from "./LiveTrackingMap";
 import BroadcastNewsTab from "./BroadcastNewsTab";
@@ -45,6 +45,8 @@ import { NotificationLifecycleManager } from "@/components/design-system/Notific
 import { ShipmentMicroPage } from "@/components/design-system/ShipmentMicroPage";
 import AdminDispatchBookingModal from "@/components/AdminDispatchBookingModal";
 import EmailStudioTab from "./EmailStudioTab";
+import SystemCleanseModal from "./SystemCleanseModal";
+import AdminGoLiveOnboarding from "./AdminGoLiveOnboarding";
 type TabId = "dashboard" | "marketplace" | "users" | "shipments" | "tracking" | "addresses" | "broadcast" | "emails" | "banners" | "referrals" | "promotions" | "appcards" | "settings" | "logs" | "cms" | "support" | "payouts";
 interface UserProfile { id: string; uid: string; name: string; email: string; phone: string; role: string; status: string; isOnline: boolean; rating: number; deliveryCount: number; walletBalance: number; loyaltyPoints: number; photoUrl: string; bikeNumber?: string; staffId?: string; lat?: number; lng?: number; isDeleted?: boolean; updatedAt?: any; lastSeen?: any; lastPing?: any; lastHeartbeat?: any; lastActive?: any; createdAt?: any; vendorBalance?: number; pin?: string; userPin?: string; securityPin?: string; pinHash?: string; activeBookingId?: string; lastLocationUpdate?: number; speed?: number; heading?: number; }
 
@@ -248,6 +250,7 @@ interface SettingsTabProps {
   addLog: (a: string, d: string, c?: string) => Promise<void> | void;
   addToast?: (t: Toast["type"], m: string) => void;
   activeUsers?: UserProfile[];
+  onOpenCleanseModal?: () => void;
 }
 interface LogsTabProps { logs: AuditEntry[]; }
 
@@ -499,7 +502,28 @@ async function seedMarketplace(db: any, addLog: any, addToast: any, createNotifi
   }
 }
 
-function DashboardTab({ deliveries, activeUsers, customers, drivers, pendingDeliveries, delivered, totalRevenue, totalTips, referrals, activeDeliveriesData, fmt, setTab, setShipmentsFilterPrefill, marketplaceEnabled, toggleMarketplace, onOpenShipmentFullView, addToast }: any) {
+function DashboardTab({ 
+  deliveries, 
+  activeUsers, 
+  customers, 
+  drivers, 
+  pendingDeliveries, 
+  delivered, 
+  totalRevenue, 
+  totalTips, 
+  referrals, 
+  activeDeliveriesData, 
+  fmt, 
+  setTab, 
+  setShipmentsFilterPrefill, 
+  marketplaceEnabled, 
+  toggleMarketplace, 
+  onOpenShipmentFullView, 
+  addToast,
+  settings,
+  db,
+  onOpenCleanseModal,
+}: any) {
   const getDeliveryTime = (x: any) => {
     if (x.createdAt?.toMillis) return x.createdAt.toMillis();
     if (x.createdAt) {
@@ -661,6 +685,20 @@ function DashboardTab({ deliveries, activeUsers, customers, drivers, pendingDeli
   const displayDeliveriesData = filterCat === "all" ? activeDeliveriesData : activeDeliveriesData.filter((a: any) => a.tag === filterCat);
 
   return <div className="tab-content space-y-5">
+      {/* Admin Launch Readiness & Go-Live Onboarding Checklist */}
+      <AdminGoLiveOnboarding
+        db={db}
+        settings={settings}
+        deliveries={deliveries}
+        drivers={drivers}
+        activeUsers={activeUsers}
+        setTab={setTab}
+        marketplaceEnabled={marketplaceEnabled}
+        toggleMarketplace={toggleMarketplace}
+        onOpenCleanseModal={onOpenCleanseModal}
+        addToast={addToast}
+      />
+
       <div className={`p-4 rounded-2xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 transition-all ${
         marketplaceEnabled 
           ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/60 text-emerald-900 dark:text-emerald-200" 
@@ -1849,6 +1887,7 @@ function AdminDashboardPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [adminProfile, setAdminProfile] = useState<{ name: string; staffId: string; phone: string; role: string } | null>(null);
   const [showAdminProfileModal, setShowAdminProfileModal] = useState(false);
+  const [showCleanseModal, setShowCleanseModal] = useState(false);
   const [userRole, setUserRole] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [email, setEmail] = useState("");
@@ -2706,6 +2745,9 @@ function AdminDashboardPage() {
               setTab("shipments");
             }}
             addToast={addToast}
+            settings={settings}
+            db={db}
+            onOpenCleanseModal={() => setShowCleanseModal(true)}
           />}
         {tab === "users" && <UsersTab activeUsers={activeUsers} deliveries={deliveries} searchQuery={searchQuery} db={db} addLog={addLog} addToast={addToast} createNotification={createNotification} userRole={userRole} currentUser={currentUser} />}
         {tab === "shipments" && <ShipmentsTab deliveries={deliveries} drivers={drivers} users={users} addressRegistry={addressRegistry} searchQuery={searchQuery} db={db} addLog={addLog} addToast={addToast} filterPrefill={shipmentsFilterPrefill} setFilterPrefill={setShipmentsFilterPrefill} />}
@@ -2717,13 +2759,27 @@ function AdminDashboardPage() {
         {tab === "referrals" && <ReferralsTab referrals={referralRows} completedReferrals={rewardedReferrals} searchQuery={searchQuery} addToast={addToast} />}
         {tab === "promotions" && <PromotionsTab promotions={promotions} db={db} addLog={addLog} addToast={addToast} />}
         {tab === "appcards" && <AppCardsTab appContent={appContent} db={db} addLog={addLog} addToast={addToast} />}
-        {tab === "settings" && <SettingsTab db={db} addLog={addLog} addToast={addToast} activeUsers={activeUsers} />}
+        {tab === "settings" && <SettingsTab db={db} addLog={addLog} addToast={addToast} activeUsers={activeUsers} onOpenCleanseModal={() => setShowCleanseModal(true)} />}
         {tab === "cms" && <CMSTab db={db} addLog={addLog} userRole={userRole} />}
         {tab === "support" && <SupportTab db={db} addLog={addLog} addToast={addToast} />}
         {tab === "logs" && <LogsTab logs={logs} />}
         {tab === "payouts" && <TipPayoutsTab withdrawals={tipWithdrawals} db={db} addLog={addLog} addToast={addToast} createNotification={createNotification} users={users} />}
       </div>
     </main>
+
+    {/* Production Go-Live System Cleanse Modal */}
+    <SystemCleanseModal
+      isOpen={showCleanseModal}
+      onClose={() => setShowCleanseModal(false)}
+      db={db}
+      currentUser={currentUser}
+      adminProfile={adminProfile}
+      addLog={addLog}
+      addToast={addToast}
+      onSuccess={() => {
+        addToast("success", "System cleansed. Dashboard and database initialized.");
+      }}
+    />
     </div>;
 }
 
@@ -8099,7 +8155,7 @@ const DEFAULT_DELIVERY_SERVICES = [
   }
 ];
 
-function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
+function SettingsTab({ db, addLog, addToast, activeUsers, onOpenCleanseModal }: SettingsTabProps) {
   const [sForm, setSForm] = useState<any>({});
   const [fcmKey, setFcmKey] = useState("");
   const [showFcm, setShowFcm] = useState(false);
@@ -8912,6 +8968,54 @@ function SettingsTab({ db, addLog, addToast, activeUsers }: SettingsTabProps) {
           >
             <Sparkles className={`w-3.5 h-3.5 ${purgingSettings ? "animate-spin" : ""}`} />
             {purgingSettings ? "Purging..." : "Purge & Upgrade Old Users"}
+          </button>
+        </div>
+
+        {/* Real Production Database Wipe & Cleanse (Keep Admins Only) */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-red-500/10 border border-red-500/30 rounded-2xl">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-black uppercase tracking-wider text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-950/60 px-2 py-0.5 rounded-full border border-red-300 dark:border-red-800">
+                Production Launch Tool &bull; Danger Zone
+              </span>
+              <p className="text-xs font-bold text-red-900 dark:text-red-200">Wipe Entire Database (Keep Admins Only)</p>
+            </div>
+            <p className="text-[11px] text-gray-600 dark:text-gray-400 font-medium mt-1">
+              Deletes all test bookings, financial transactions, and non-admin mock accounts to prepare the system for official live operations.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onOpenCleanseModal}
+            className="px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>Cleanse Database &amp; Go Live</span>
+          </button>
+        </div>
+
+        {/* Re-open Go-Live Checklist on Dashboard */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl">
+          <div>
+            <p className="text-xs font-bold text-[#111] dark:text-white">Admin Go-Live Onboarding Checklist</p>
+            <p className="text-[11px] text-gray-500 dark:text-gray-400 font-medium mt-0.5">
+              Re-open or review the 8 launch readiness tasks on the main dashboard to audit production configurations.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                await setDoc(doc(db, "system_config", "onboarding"), { dismissed: false }, { merge: true });
+                addToast?.("success", "Launch checklist re-opened on Dashboard tab.");
+              } catch (e: any) {
+                addToast?.("error", e.message);
+              }
+            }}
+            className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+          >
+            <Rocket className="w-3.5 h-3.5" />
+            <span>Show Checklist on Dashboard</span>
           </button>
         </div>
       </div>

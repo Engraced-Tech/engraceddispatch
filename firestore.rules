@@ -232,7 +232,7 @@ service cloud.firestore {
         )
       );
 
-      allow delete: if isSuperAdmin();
+      allow delete: if isAdmin();
 
       // Notifications inbox: recipients and admins manage; creation is
       // restricted to the owner so strangers cannot spam inboxes (C8).
